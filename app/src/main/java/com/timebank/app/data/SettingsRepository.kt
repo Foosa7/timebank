@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -22,6 +23,8 @@ class SettingsRepository(private val context: Context) {
         val MULT = doublePreferencesKey("earn_multiplier")
         val LOCK = booleanPreferencesKey("lock_when_broke")
         val BALANCE = doublePreferencesKey("balance")
+        val OVERRIDES = stringPreferencesKey("app_overrides")
+        val PRIVATE = doublePreferencesKey("private_surcharge")
     }
 
     val configFlow: Flow<EconomyConfig> = context.dataStore.data.map { p ->
@@ -31,7 +34,9 @@ class SettingsRepository(private val context: Context) {
             mediaRatePerMin = p[Keys.MEDIA] ?: d.mediaRatePerMin,
             appCostPerMin = p[Keys.APP] ?: d.appCostPerMin,
             earnMultiplier = p[Keys.MULT] ?: d.earnMultiplier,
-            lockWhenBroke = p[Keys.LOCK] ?: d.lockWhenBroke
+            lockWhenBroke = p[Keys.LOCK] ?: d.lockWhenBroke,
+            appOverrides = decodeOverrides(p[Keys.OVERRIDES]),
+            privateSurchargePerMin = p[Keys.PRIVATE] ?: d.privateSurchargePerMin
         )
     }
 
@@ -49,6 +54,27 @@ class SettingsRepository(private val context: Context) {
             it[Keys.APP] = c.appCostPerMin
             it[Keys.MULT] = c.earnMultiplier
             it[Keys.LOCK] = c.lockWhenBroke
+            it[Keys.OVERRIDES] = encodeOverrides(c.appOverrides)
+            it[Keys.PRIVATE] = c.privateSurchargePerMin
         }
     }
+}
+
+/*
+ * Preferences DataStore has no map type, so overrides ride in one string as
+ * "pkg=cost;pkg=cost". Package names can contain neither '=' nor ';', so a plain
+ * split is unambiguous and needs no JSON dependency.
+ */
+
+internal fun encodeOverrides(m: Map<String, Double>): String =
+    m.entries.joinToString(";") { "${it.key}=${it.value}" }
+
+internal fun decodeOverrides(s: String?): Map<String, Double> {
+    if (s.isNullOrBlank()) return emptyMap()
+    return s.split(";").mapNotNull { entry ->
+        val i = entry.lastIndexOf('=')
+        if (i <= 0) return@mapNotNull null
+        val cost = entry.substring(i + 1).toDoubleOrNull() ?: return@mapNotNull null
+        entry.substring(0, i) to cost
+    }.toMap()
 }

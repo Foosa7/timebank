@@ -119,6 +119,12 @@ class TimeBankService : Service() {
         val isNeutral =
             fgPkg == null || fgPkg == packageName || fgPkg == launcherPackage
 
+        // Private browsing costs extra, but only for the app actually in the foreground:
+        // a backgrounded browser with incognito tabs open shouldn't tax an unrelated app.
+        val privateNow =
+            fgPkg != null && fgPkg in Economy.privatePackages.value &&
+                cfg.privateSurchargePerMin > 0.0
+
         val (state, ratePerMin) = when {
             mediaPlaying ->
                 ActivityState.MEDIA to cfg.mediaRatePerMin * cfg.earnMultiplier
@@ -126,10 +132,14 @@ class TimeBankService : Service() {
                 ActivityState.SCREEN_OFF to cfg.offRatePerMin * cfg.earnMultiplier
             isNeutral ->
                 ActivityState.NEUTRAL to 0.0
-            else ->
-                ActivityState.APP to -cfg.appCostPerMin
+            else -> {
+                val surcharge = if (privateNow) cfg.privateSurchargePerMin else 0.0
+                ActivityState.APP to -(cfg.costFor(fgPkg) + surcharge)
+            }
         }
 
+        // Only meaningful while actually being charged for an app.
+        Economy.privateSurchargeActive.value = privateNow && state == ActivityState.APP
         Economy.activity.value = state
         Economy.ratePerMin.value = ratePerMin
 
@@ -224,6 +234,7 @@ class TimeBankService : Service() {
         Economy.locked.value = false
         Economy.activity.value = ActivityState.STOPPED
         Economy.ratePerMin.value = 0.0
+        Economy.privateSurchargeActive.value = false
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

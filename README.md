@@ -14,7 +14,7 @@ per-minute rate to your balance:
 |-------|-----------|--------|
 | **Screen off** | screen off, nothing playing | `+ offRate × multiplier` /min |
 | **Media** | YouTube / music actively playing | `+ mediaRate × multiplier` /min |
-| **App open** | an app is in the foreground | `− appCost` /min |
+| **App open** | an app is in the foreground | `− appCost` /min (or that app's own price) |
 | **Neutral** | home launcher or TimeBank itself | nothing |
 
 - Rates are accounted by *elapsed time*, so accuracy doesn't depend on the tick rate.
@@ -22,6 +22,24 @@ per-minute rate to your balance:
 - The multiplier boosts both earning rates, but never the app cost.
 - Exactly one state applies per tick, and **the order above is the precedence
   order**: media wins over screen-off, which wins over neutral, which wins over app.
+
+### Charging some apps more
+
+Any app can be given its own per-minute price on the Settings tab — put Instagram at
+`$90/min` and leave everything else on the default. Apps you haven't priced are charged
+the normal app cost.
+
+On top of that, browsers can be charged a **private-browsing surcharge** while they have
+incognito / InPrivate tabs open. TimeBank spots this from the ongoing "close your private
+tabs" notification that Chrome, Edge and Firefox post, so it needs no extra permission
+beyond the notification access it already asks for, and works with any browser.
+
+Two things that signal is honest about:
+
+- It means private tabs **exist**, not that you're looking at one. Park an InPrivate tab in
+  the background and the surcharge keeps applying to that browser until you close it.
+- If you've blocked that browser's notifications in Android settings, it never posts the
+  notification and the surcharge never fires.
 
 > Note: **Media takes priority over App**. If music plays while you scroll an app,
 > you'll be on the media rate, not the app cost. To make playback count as usage,
@@ -49,6 +67,8 @@ to DataStore:
 | Media rate | `−$60` – `$60` /min | `$3` |
 | App-open cost | `$0` – `$120` /min | `$30` |
 | Earn multiplier | `0.1x` – `10x` | `1x` |
+| Per-app cost | `$0` – `$240` /min | unset (uses default) |
+| Incognito surcharge | `$0` – `$240` /min | `$60` |
 | Lock apps at $0 | on / off | on |
 
 There's also a **Reset balance to $0** button. The live balance is checkpointed
@@ -64,14 +84,14 @@ disabled until it's granted.
 | Permission | Why | Where granted |
 |------------|-----|---------------|
 | **Usage access** (required) | see which app is foreground to charge it | Settings → Usage access |
-| **Notification access** | read active media sessions (YouTube/music) | Settings → Notification access |
+| **Notification access** | read active media sessions, and spot open private tabs | Settings → Notification access |
 | **Display over other apps** | show the lock overlay when you hit `$0` | Settings → Display over other apps |
 | **Ignore battery optimization** | keep earning reliably screen-off | system dialog |
 | **Post notifications** (Android 13+) | show the live-balance notification | runtime prompt |
 | Wake lock / foreground service | keep the tick loop alive | manifest only |
 
-Without notification access, media playback simply never registers and you're
-charged the normal app rate instead.
+Without notification access, media playback never registers and the incognito surcharge
+never applies — you're charged the normal app rate instead.
 
 ## Build & run
 
@@ -120,7 +140,9 @@ service/MediaNotificationListener.kt   enables media-session access
 service/LockOverlay.kt     the full-screen "you're broke" window
 
 ui/HomeScreen.kt           balance, live rate, start/stop, permission cards
-ui/SettingsScreen.kt       rate/cost/multiplier sliders, lock switch, reset balance
+ui/SettingsScreen.kt       rate/cost/multiplier sliders, per-app prices, lock switch
+ui/AppPickerDialog.kt      searchable installed-app picker
+data/InstalledApps.kt      launchable apps + labels for the picker
 ui/Support.kt              permission checks + re-check-on-resume helper
 util/Format.kt             money / rate / state-label formatting
 ```

@@ -84,10 +84,14 @@ partial wake lock and runs a coroutine tick loop (`TICK_MS = 3s`). Each `tick()`
 2. Resolves exactly one `ActivityState` in a `when` whose **order encodes the economy's
    precedence**: media > screen-off > neutral (launcher / TimeBank itself) > app. Changing
    the branch order changes the product's rules — the README documents media beating app.
-3. Applies `rate × deltaMin` where `deltaMin` comes from `SystemClock.elapsedRealtime()`
+3. Costs resolve as `cfg.costFor(pkg)` (per-app override, else `appCostPerMin`) plus
+   `privateSurchargePerMin` when that same foreground package appears in
+   `Economy.privatePackages` — the surcharge is deliberately keyed on the foreground package so
+   a backgrounded browser with incognito tabs can't tax an unrelated app.
+4. Applies `rate × deltaMin` where `deltaMin` comes from `SystemClock.elapsedRealtime()`
    deltas, so accounting stays correct if ticks are delayed or the rate changes. Never
    replace this with "rate × TICK_MS".
-4. Clamps the balance at `0.0` and raises/hides `LockOverlay` when broke while an app is open.
+5. Clamps the balance at `0.0` and raises/hides `LockOverlay` when broke while an app is open.
 
 Persistence is deliberately lazy: the balance is written every 4th tick (~12s), on
 SCREEN_ON/SCREEN_OFF broadcasts, and on stop. `Economy.balance` is the live value; DataStore
@@ -107,9 +111,14 @@ window each tick and caches the last `MOVE_TO_FOREGROUND` package. It swallows e
 and returns the stale value when the permission is missing, so a null/stale package is normal,
 not a bug.
 
-`service/MediaMonitor.kt` / `MediaNotificationListener.kt` — the listener service exists only
-to be a valid `ComponentName` for `MediaSessionManager.getActiveSessions()`; it has no
-notification-handling logic and should stay empty.
+`service/MediaMonitor.kt` / `MediaNotificationListener.kt` — the listener does two jobs off one
+permission: it is the `ComponentName` that makes `MediaSessionManager.getActiveSessions()` legal,
+**and** it watches for the ongoing "private tabs open" notification browsers post, publishing the
+owning packages to `Economy.privatePackages`. Detection is substring matching over channel id,
+tag, title and text (`incognito`, `inprivate`, `private tab`, `private browsing`) rather than a
+browser allow-list, so any browser works. Two limits worth remembering: the notification means
+private tabs *exist*, not that one is on screen, and a browser whose notifications the user has
+blocked never posts it, so the surcharge silently never fires.
 
 `service/LockOverlay.kt` — a hand-built `TYPE_APPLICATION_OVERLAY` View (not Compose), posted
 to the main-thread `Handler` because the service ticks on `Dispatchers.Default`. Silently
@@ -127,5 +136,8 @@ permission needs a `has*` predicate there and a `PermissionCard` wired to the sa
   no icon dependency is declared.
 - All money formatting goes through `util/Format.kt` (`formatMoney`, `formatRate`,
   `stateLabel`); don't inline `String.format` for currency.
+- Preferences DataStore has no map type, so `appOverrides` is persisted as one
+  `"pkg=cost;pkg=cost"` string via `encodeOverrides`/`decodeOverrides`; package names contain
+  neither delimiter, so no JSON dependency is needed.
 - Rates are always **per minute** and signed at the point of use (earn positive, app cost
   negated in the `when`). `earnMultiplier` boosts earning rates only, never `appCostPerMin`.

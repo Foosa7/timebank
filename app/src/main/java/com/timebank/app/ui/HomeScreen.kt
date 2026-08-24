@@ -47,6 +47,7 @@ fun HomeScreen() {
     val running by Economy.serviceRunning.collectAsState()
     val locked by Economy.locked.collectAsState()
     val pkg by Economy.currentPackage.collectAsState()
+    val privateSurcharge by Economy.privateSurchargeActive.collectAsState()
 
     val resume = rememberResumeTick()
     val hasUsage = remember(resume) { hasUsageAccess(ctx) }
@@ -89,6 +90,15 @@ fun HomeScreen() {
             text = label,
             style = MaterialTheme.typography.bodyMedium
         )
+
+        if (privateSurcharge) {
+            Text(
+                text = "🕵\u200d♂\uFE0F  incognito surcharge applied",
+                color = Color(0xFFC62828),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
 
         Spacer(Modifier.height(28.dp))
         Button(
