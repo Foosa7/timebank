@@ -14,11 +14,17 @@ enum class ActivityState {
 /**
  * All tunable numbers. Rates are money-per-minute.
  * Earning rates are multiplied by [earnMultiplier]; the app cost is not.
+ *
+ * The defaults follow the "$1/min" model in README's *Nudge design* section: earning
+ * exactly 1/min makes the unit *minutes*, so every cost reads as an exchange rate. The
+ * app cost then falls out of the target usage rather than being picked by feel — a
+ * balance is stable at `U = 1440 / (1 + appCostPerMin)` minutes of app use per day, so
+ * 11.0 targets roughly two hours.
  */
 data class EconomyConfig(
-    val offRatePerMin: Double = 10.0,    // earn while screen is fully off
-    val mediaRatePerMin: Double = 3.0,   // earn (or cost, if negative) while media plays
-    val appCostPerMin: Double = 30.0,    // charged while an app is open
+    val offRatePerMin: Double = 1.0,     // earn while screen is fully off
+    val mediaRatePerMin: Double = 0.3,   // earn (or cost, if negative) while media plays
+    val appCostPerMin: Double = 11.0,    // charged while an app is open
     val earnMultiplier: Double = 1.0,    // boosts all earning rates
     val lockWhenBroke: Boolean = true,   // block apps when the balance hits 0
 
@@ -26,7 +32,7 @@ data class EconomyConfig(
     val appOverrides: Map<String, Double> = emptyMap(),
 
     /** Extra charged on top while the foreground app has private/incognito tabs open. */
-    val privateSurchargePerMin: Double = 60.0
+    val privateSurchargePerMin: Double = 22.0
 ) {
     /** The per-minute cost of having [pkg] in the foreground, before any private surcharge. */
     fun costFor(pkg: String?): Double =

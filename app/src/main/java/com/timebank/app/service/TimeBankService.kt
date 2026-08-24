@@ -17,10 +17,10 @@ import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.timebank.app.MainActivity
-import com.timebank.app.R
 import com.timebank.app.data.ActivityState
 import com.timebank.app.data.AppGraph
 import com.timebank.app.data.Economy
+import com.timebank.app.util.formatCompactMoney
 import com.timebank.app.util.formatMoney
 import com.timebank.app.util.formatRate
 import com.timebank.app.util.stateLabel
@@ -210,9 +210,11 @@ class TimeBankService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val rate = Economy.ratePerMin.value
+        val balance = Economy.balance.value
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_coin)
-            .setContentTitle("Balance: " + formatMoney(Economy.balance.value))
+            // The balance itself is the status-bar icon, so it's visible without the shade.
+            .setSmallIcon(BalanceIcon.forText(formatCompactMoney(balance)))
+            .setContentTitle("Balance: " + formatMoney(balance))
             .setContentText(stateLabel(Economy.activity.value) + "  •  " + formatRate(rate) + "/min")
             .setOngoing(true)
             .setOnlyAlertOnce(true)

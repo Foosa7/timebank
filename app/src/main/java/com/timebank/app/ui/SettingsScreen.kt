@@ -64,22 +64,25 @@ fun SettingsScreen() {
         RateSlider(
             label = "Screen-off earning",
             value = cfg.offRatePerMin,
-            range = 0f..120f,
-            suffix = "/min"
+            range = 0f..10f,
+            suffix = "/min",
+            decimals = 1
         ) { apply(cfg.copy(offRatePerMin = it)) }
 
         RateSlider(
             label = "Media (YouTube / music) rate",
             value = cfg.mediaRatePerMin,
-            range = -60f..60f,
-            suffix = "/min"
+            range = -10f..10f,
+            suffix = "/min",
+            decimals = 1
         ) { apply(cfg.copy(mediaRatePerMin = it)) }
 
         RateSlider(
             label = "App-open cost",
             value = cfg.appCostPerMin,
-            range = 0f..120f,
-            suffix = "/min"
+            range = 0f..60f,
+            suffix = "/min",
+            decimals = 1
         ) { apply(cfg.copy(appCostPerMin = it)) }
 
         RateSlider(
@@ -109,8 +112,9 @@ fun SettingsScreen() {
         RateSlider(
             label = "Incognito surcharge",
             value = cfg.privateSurchargePerMin,
-            range = 0f..240f,
-            suffix = "/min"
+            range = 0f..60f,
+            suffix = "/min",
+            decimals = 1
         ) { apply(cfg.copy(privateSurchargePerMin = it)) }
 
         Spacer(Modifier.height(20.dp))
@@ -211,11 +215,11 @@ private fun PerAppCosts(
                     ) { Text("Remove") }
                 }
                 Slider(
-                    value = cost.toFloat().coerceIn(0f, 240f),
+                    value = cost.toFloat().coerceIn(0f, 60f),
                     onValueChange = {
                         apply(cfg.copy(appOverrides = cfg.appOverrides + (pkg to it.toDouble())))
                     },
-                    valueRange = 0f..240f
+                    valueRange = 0f..60f
                 )
             }
         }

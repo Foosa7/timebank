@@ -24,14 +24,15 @@ versions live in `build.gradle.kts` and `app/build.gradle.kts`):
 
 ### Building on this machine (verified working)
 
-The SDK lives at `~/android-sdk` (**not** `~/Android/Sdk`) and `local.properties` already
-points there. The catch is Java: every JDK under `/usr/lib/jvm` is a **JRE with no `javac`**,
-so Gradle fails with "Toolchain installation ... does not provide the required capabilities:
-[JAVA_COMPILER]". A working Temurin 21 JDK is unpacked in the session scratchpad. Build with:
+The SDK lives at `~/Android/Sdk`, and there is **no `local.properties`** — export
+`ANDROID_HOME` instead of creating one. The catch is Java: everything under `/usr/lib/jvm`
+is a **JRE with no `javac`** (including `java-25-openjdk`), so Gradle fails with "Toolchain
+installation ... does not provide the required capabilities: [JAVA_COMPILER]". Unpack a
+Temurin 21 JDK into the session scratchpad and build with:
 
 ```
 export JAVA_HOME=<scratchpad>/jdk/jdk-21.0.12.1+1
-export ANDROID_HOME=$HOME/android-sdk
+export ANDROID_HOME=$HOME/Android/Sdk
 ./gradlew assembleDebug          # ~70s cold, APK -> app/build/outputs/apk/debug/
 ```
 
@@ -45,12 +46,30 @@ and `unsafeCheckOpNoThrow` — are expected and not regressions.
 
 ### Running it
 
-An x86_64 AVD named `fugazi` (API 35, software GPU) exists:
+An x86_64 AVD named `timebank` (API 35, `google_apis`) exists. **It only boots with
+`-gpu host`** — this is the load-bearing flag:
 
 ```
-$ANDROID_HOME/emulator/emulator -avd fugazi -gpu swiftshader_indirect &
+$ANDROID_HOME/emulator/emulator -avd timebank \
+  -no-window -no-audio -no-boot-anim -no-snapshot -read-only -gpu host -memory 2048
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+`-gpu off`, `-gpu guest` and `-gpu swiftshader[_indirect]` **all SIGSEGV** about six
+seconds into guest boot, inside the host GL/EGL path, with nothing useful in the emulator
+log — it just stops. That is backwards from the usual headless advice, so don't "fix" a
+crash by switching to a software renderer. The only counter-intuitive part is that
+`-no-window` still initialises host GL, so the real Intel GPU path is the working one.
+
+Two debugging notes that cost time:
+
+- The emulator log shows **no error** on this crash. `coredumpctl list` is where the
+  `SIGSEGV` actually shows up — check there before theorising about memory.
+- Launch it with the Bash tool's `run_in_background`, not `nohup ... &`; a backgrounded
+  `nohup` dies when its foreground tool call returns.
+- `pkill -f "emulator -avd timebank"` also matches the shell running it, killing your own
+  command (exit 144). Match the binary path instead:
+  `pgrep -f "^$ANDROID_HOME/emulator/qemu"`.
 
 TimeBank's four permissions are all special-access ones that a fresh install won't have.
 Grant them from the shell instead of clicking through system Settings:
@@ -65,7 +84,7 @@ adb shell dumpsys deviceidle whitelist +com.timebank.app
 
 To exercise the accounting loop without waiting: `adb shell input keyevent KEYCODE_POWER`
 to sleep the screen, wait, then power + `KEYCODE_MENU` to wake and dismiss the keyguard.
-30s of screen-off at the default rate yields exactly $5.00.
+30s of screen-off at the default rate ($1/min) yields exactly $0.50.
 
 ## Architecture
 

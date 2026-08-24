@@ -26,7 +26,7 @@ per-minute rate to your balance:
 ### Charging some apps more
 
 Any app can be given its own per-minute price on the Settings tab — put Instagram at
-`$90/min` and leave everything else on the default. Apps you haven't priced are charged
+`$30/min` and leave everything else on the default. Apps you haven't priced are charged
 the normal app cost.
 
 On top of that, browsers can be charged a **private-browsing surcharge** while they have
@@ -45,6 +45,20 @@ Two things that signal is honest about:
 > you'll be on the media rate, not the app cost. To make playback count as usage,
 > set the media rate negative in Settings.
 
+## Watching the balance
+
+The balance is the notification's **small icon**, drawn as a bitmap rather than a fixed
+glyph, so the number sits in the status-bar strip and is readable without pulling the shade
+down. It's abbreviated to fit a 24dp square (`480`, `1.2k`, `128k`) and drawn as an alpha
+mask, which is what lets the system tint it correctly on both light and dark status bars.
+The app draws edge-to-edge, so `TimeBankTheme` also sets `isAppearanceLightStatusBars` from
+the current theme — without it the light theme renders white-on-white and the balance (and
+the system clock along with it) disappears.
+
+Pulling the shade down gives the full figure plus the current state and signed rate. Both
+refresh on the same 3s tick as the accounting itself, and the icon bitmap is only redrawn
+when the abbreviated number actually changes.
+
 ## Going broke
 
 When your balance hits `$0` while an app is in the foreground, TimeBank raises a
@@ -56,20 +70,231 @@ The lock needs the *Display over other apps* permission; without it the overlay
 silently does nothing and you keep drifting along at `$0`. You can turn the whole
 behaviour off with the **Lock apps at $0** switch in Settings.
 
+## Nudge design
+
+Notes on *why* the economy is shaped the way it is, and where it's going. Everything
+below is design rationale — see the status table at the end for what's actually built.
+
+The thing being maximised is not "less screen time". It is **less screen time
+integrated over the months the app stays installed**. A harsh configuration that wins
+week one and gets deleted in week three scores worse than a mild one that runs quietly
+for two years. Every idea here gets judged against *does this survive month six?*
+
+### Why a meter and not a ticket
+
+Two ways to charge for an app: deduct continuously while it's open (a meter), or take a
+fixed payment up front for a fixed block and close the app when it expires (a ticket).
+TimeBank meters. As a *price system* the meter wins on six counts:
+
+- **The marginal price is right.** With a meter the next minute always costs something.
+  Inside a prepaid block the next minute costs *zero* — the price is highest at the door,
+  where you're still deliberate, and vanishes once you're captured. That's backwards.
+- **Proportionality.** Ten seconds costs ten seconds' worth, not five minutes' worth.
+- **No dead weight.** Unused prepaid time is currency that bought nothing, and burnt
+  blocks generate exactly the resentment that gets the app disabled.
+- **Nothing to game.** Blocks reward cramming, batching and timing your entry to the
+  boundary. You end up optimising against your own tool.
+- **It composes.** Every rule in the app is a signed per-minute rate, so per-app prices,
+  the incognito surcharge, the media exemption and the earn multiplier all live in one
+  unit and simply add. A block price has no clean way to express "20% more while
+  incognito tabs are open", or what happens when media starts mid-block.
+- **It's nearly stateless.** `rate × deltaMin` off `elapsedRealtime()` stays correct when
+  ticks are delayed, the rate changes mid-use, or the process restarts. Blocks need a
+  state machine — start time, remaining, config change mid-block, reboot — and every
+  entry in that list is a bug you have to persist and reconcile.
+
+The meter's one real flaw is that it's **quiet**. Each 3s tick costs a fraction of a
+cent, there's no moment where you decide anything, and the cost only becomes perceptible
+in aggregate, long after the behaviour it was meant to influence. It also prices
+*duration* when the actual pathology is *frequency* — the forty-times-a-day reflexive
+check is nearly free under a meter.
+
+The fix is to add a signal, not to replace the pricing:
+
+> **Cover charge.** A fixed toll at the moment an app comes to the foreground, *on top*
+> of the meter — and no auto-close, ever. The toll creates a decision point at the
+> threshold, which is the one place intervention reliably works; it taxes re-entry, so it
+> hits the checking loop the meter can't; it makes price legible ("Instagram costs 100 to
+> open" is a number you can hold in your head, `$0.30/min` isn't); and it moves the
+> affordability check to the door, which is far kinder than being walled mid-scroll at
+> `$0`. Metering on top keeps the duration signal and prevents the sunk-cost floor a
+> prepaid block creates — there's no paid window to "use up".
+>
+> Needs a **grace window**: switching out to answer a text and coming back 20 seconds
+> later must not re-charge, or the toll reads as arbitrary and buggy. Same package within
+> ~60s, no new charge.
+
+Auto-close is rejected outright. It fires mid-sentence, mid-video, mid-checkout, and hard
+interrupts are the most reliable way an app like this gets uninstalled. It also breaks the
+metaphor — an economy doesn't confiscate what you already bought — and it isn't a nudge at
+all, it's a mandate. If you're willing to mandate you don't need a currency; a plain timer
+does it. Running both is two control mechanisms fighting over the same behaviour.
+
+### Picking the numbers
+
+Set screen-off earning to **`$1`/min**. The point isn't roundness, it's that the unit
+becomes *minutes*: every price then reads as an exchange rate with no conversion step. An
+app at `$11`/min means eleven minutes of restraint buys one minute of scroll, and you can
+feel that without doing arithmetic.
+
+Which makes the earn rate a non-parameter. The **ratio** is the parameter. Earning `1`/min
+whenever the screen is off and paying `P`/min while an app is open, the balance is stable
+at exactly:
+
+```
+U = 1440 / (1 + P)      minutes of app use per day
+```
+
+| `P` (app cost/min) | Equilibrium daily use |
+|---|---|
+| 5  | 4 hours |
+| 11 | 2 hours |
+| 15 | 90 minutes |
+| 23 | 1 hour |
+
+So you don't guess a price — you pick a target and solve for it. (First-order only: it
+assumes all screen-off time earns and ignores time parked in the neutral state.)
+
+This is also why timid pricing does nothing. At `P = 2` or `3` the equilibrium is six to
+eight hours a day, the economy never binds, and you'd wrongly conclude the whole concept
+doesn't work.
+
+### The sleep problem, and the 10:00 settlement
+
+Eight hours asleep is 480 minutes of screen-off — at `$1`/min that's `$480` a night,
+roughly 40% of daily income, earned unconditionally. That isn't a nudge, it's a basic
+income, and it corrupts the marginal decision: putting the phone down for twenty minutes
+earns `$20`, which against `$480` of sleep money is noise. Restraint stops funding you, so
+restraint stops mattering.
+
+It also collides head-on with the morning surcharge below. **You wake up at your richest
+point of the day** — the balance peaks the instant the alarm goes off — at exactly the
+moment you want to be poorest. Even a 5× surcharge on an `$11`/min app is `$55`/min, and
+`$480` still buys nine minutes of wake-up scrolling.
+
+The chosen fix, to be run as an experiment:
+
+> **Overnight earnings don't settle until 10:00.** Money earned between 23:00 and 07:00
+> posts to the balance at 10:00 rather than in real time. Banks settle; this is native to
+> the metaphor. You're still fully credited for sleeping, but the morning can only be
+> funded by what you actually had on hand at bedtime — which gives the morning rules teeth
+> without needing to be punitive.
+
+Cutting the sleep rate to `$0.20`/min would also work, but it reads as a punishment for
+sleeping in a way settlement doesn't.
+
+### The morning: admission control, not price
+
+The wake-up scroll gets special treatment because its harm isn't proportional to duration.
+The mechanism matters for picking the right instrument:
+
+- It's **contrast, not depletion**. A high-intensity, zero-effort reward first thing sets
+  the baseline for what feels rewarding, and everything effortful afterwards — work,
+  reading, an actual conversation — gets measured against it and feels flat.
+- **Executive control is weakest right after waking.** You aren't deciding, you're
+  executing an automatism.
+- It loads **other people's agendas** into your head before you've formed your own.
+
+Because it's baseline-setting rather than depletion, **delay is the entire intervention**.
+The same twenty minutes at 09:30, after you've done something effortful and set your own
+agenda, costs a fraction of what it costs at 06:40. It doesn't need to be expensive. It
+needs to be *later*.
+
+So the morning is the one case where the ticket-vs-meter argument above **flips**: harm is
+concentrated at the *first open*, minute fifteen is barely worse than minute two, and when
+harm is concentrated at admission you gate admission. A price is doubly wrong here — prices
+only work on an agent doing cost-benefit, and at 06:40 there isn't one.
+
+> **Morning curfew.** A hard block that expires, not a surcharge. Not a mandate — a delay
+> with a visible end, because "not until 08:30" is something you can comply with in a way
+> "never" isn't.
+>
+> **Anchored to waking, not the clock.** A fixed 06:00–09:00 window punishes a 05:00 start
+> and misses a 10:00 one. The wake event is already observable: the first unlock after a
+> long continuous screen-off stretch (4h+) is a wake, and the curfew runs ~90 minutes from
+> that moment.
+>
+> **A slow override, not a priced one.** You're rich at that hour, so any payable price
+> gets paid. Instead: you may request access and it opens in ten minutes. That's
+> self-defeating in exactly the right way — the mechanism that grants the wish is also
+> what cures it. Most of the time you won't be there when it unlocks.
+
+Worth deciding what fills the gap. A blocked reflex with nothing to do goes looking for
+another screen.
+
+### Happy hour
+
+A scheduled window where app costs are discounted. Its real value isn't the discount — it's
+that it converts **"no" into "not yet"**. Deferred urges dissolve at a remarkable rate, and
+"I'll do that at 19:00" is a far easier instruction to follow than "don't". It also gives
+the system a designated release valve, which is a large part of what keeps it installed.
+
+One placement note: put the window where phone use costs your actual life the least. If
+dinner is time with people, discounting it protects the wrong hour — put it just after.
+
+### Where the balance actually lives
+
+Three dials, in order of leverage:
+
+1. **The earn/spend ratio.** The most important number in the product. Too generous and the
+   app is decoration; too tight and every session ends in a lockout, which trains you to
+   read the app as an adversary. The signature of a good ratio is going broke
+   *occasionally* — often enough that the currency is real, rarely enough that it never
+   feels like the default state.
+2. **Friction on the escape hatch.** A self-binding system has to make changing your own
+   rules slightly costlier than following them, or the Settings screen *is* the workaround
+   and the economy is theatre. But if overriding is impossible, the only remaining exit is
+   uninstall, and a small defeat becomes a total one. The right amount: enough that raising
+   your own allowance is a deliberate act you notice yourself performing, not enough that
+   deleting the app is easier. Today there is **no** friction there at all.
+3. **Habituation.** Any fixed price gets absorbed — a 100 cover charge stops being felt
+   around week three, once it's internalised as the cost of doing business. Long-term
+   systems need drift (prices that respond to your own recent behaviour) or some
+   variability, or the nudge decays to zero while the app keeps reporting success.
+
+### Instrumentation comes first
+
+All three of those dials are currently tuned blind. The service already knows every open,
+every lockout, every session length and every balance trough — and records none of it.
+There is no way to tell whether a configuration is working, and no way to notice a nudge
+decaying. **Logging the accounting loop is worth more than any pricing change**, and should
+land before the ideas above are tuned.
+
+### Status
+
+| Idea | Status |
+|---|---|
+| Continuous metering, `elapsedRealtime` accounting | built |
+| Per-app prices, incognito surcharge, media precedence | built |
+| Lock at `$0` with home-screen escape | built |
+| Session/lockout instrumentation | **not built** — do this first |
+| `$1`/min unit, ratio-derived app cost | built — defaults are `$1` earn / `$11` app cost |
+| Balance visible in the status bar | built |
+| Cover charge + grace window | not built |
+| 10:00 settlement of overnight earnings | not built — next experiment |
+| Wake-anchored morning curfew + slow override | not built |
+| Happy hour window | not built |
+| Friction on Settings edits | not built |
+
 ## Settings
 
-All five knobs take effect immediately on the running service and are persisted
+Every knob takes effect immediately on the running service and is persisted
 to DataStore:
 
 | Setting | Range | Default |
 |---------|-------|---------|
-| Screen-off earning | `$0` – `$120` /min | `$10` |
-| Media rate | `−$60` – `$60` /min | `$3` |
-| App-open cost | `$0` – `$120` /min | `$30` |
+| Screen-off earning | `$0` – `$10` /min | `$1` |
+| Media rate | `−$10` – `$10` /min | `$0.3` |
+| App-open cost | `$0` – `$60` /min | `$11` |
 | Earn multiplier | `0.1x` – `10x` | `1x` |
-| Per-app cost | `$0` – `$240` /min | unset (uses default) |
-| Incognito surcharge | `$0` – `$240` /min | `$60` |
+| Per-app cost | `$0` – `$60` /min | unset (uses default) |
+| Incognito surcharge | `$0` – `$60` /min | `$22` |
 | Lock apps at $0 | on / off | on |
+
+The defaults are the `$1`/min model from *Nudge design* above: earning exactly `$1`/min
+makes the unit **minutes**, so `$11`/min for an app means eleven minutes of restraint buys
+one minute of scroll. `$11` isn't a taste judgement either — it's `1440 / (1 + 11) ≈ 2
+hours` of app use as the daily break-even.
 
 There's also a **Reset balance to $0** button. The live balance is checkpointed
 to disk every ~12 seconds, whenever the screen turns on or off, and on stop — so
@@ -138,6 +363,7 @@ service/ForegroundAppMonitor.kt   UsageStats -> current foreground package
 service/MediaMonitor.kt    MediaSessionManager -> is media playing
 service/MediaNotificationListener.kt   enables media-session access
 service/LockOverlay.kt     the full-screen "you're broke" window
+service/BalanceIcon.kt     renders the balance into the status-bar notification icon
 
 ui/HomeScreen.kt           balance, live rate, start/stop, permission cards
 ui/SettingsScreen.kt       rate/cost/multiplier sliders, per-app prices, lock switch
