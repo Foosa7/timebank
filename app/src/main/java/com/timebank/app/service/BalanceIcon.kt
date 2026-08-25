@@ -23,11 +23,12 @@ object BalanceIcon {
     private const val SIZE_PX = 96
 
     /**
-     * Glyphs stop well short of the edge. The status bar packs icons tightly, so a
-     * four-character balance rendered edge-to-edge reads as a smudge next to its
-     * neighbours — the margin is what keeps it looking like a number.
+     * Glyphs stop short of the edge. The status bar packs icons tightly, so a balance
+     * rendered truly edge-to-edge runs into its neighbours — but the old margin was
+     * generous enough to leave the number looking shrunken next to the clock, so this
+     * keeps only what it takes to stay separated.
      */
-    private const val MAX_GLYPH_PX = 78f
+    private const val MAX_GLYPH_PX = 92f
 
     private var cachedText: String? = null
     private var cachedIcon: IconCompat? = null

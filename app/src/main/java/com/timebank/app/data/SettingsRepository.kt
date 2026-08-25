@@ -26,13 +26,17 @@ class SettingsRepository(private val context: Context) {
         val BALANCE = doublePreferencesKey("balance")
         val OVERRIDES = stringPreferencesKey("app_overrides")
         val PRIVATE = doublePreferencesKey("private_surcharge")
-        val COVER = doublePreferencesKey("cover_charge")
+        // Was a single double under "cover_charge" before the charge went per-app; the
+        // old key is left behind rather than migrated, so upgrades start un-gated.
+        val COVER = stringPreferencesKey("cover_charges")
         val HAPPY_HOURS = stringPreferencesKey("happy_hours")
         val HAPPY_APP = doublePreferencesKey("happy_app_cost")
         val HAPPY_COVER = doublePreferencesKey("happy_cover_charge")
         val SURGE_HOURS = stringPreferencesKey("surge_hours")
         val SURGE_APP = doublePreferencesKey("surge_app_cost")
         val SURGE_COVER = doublePreferencesKey("surge_cover_charge")
+        val SLEEP_HOURS = stringPreferencesKey("sleep_hours")
+        val SLEEP_RATE = doublePreferencesKey("sleep_off_rate")
     }
 
     val configFlow: Flow<EconomyConfig> = context.dataStore.data.map { p ->
@@ -46,7 +50,7 @@ class SettingsRepository(private val context: Context) {
             lockWhenBroke = p[Keys.LOCK] ?: d.lockWhenBroke,
             appOverrides = decodeOverrides(p[Keys.OVERRIDES]),
             privateSurchargePerMin = p[Keys.PRIVATE] ?: d.privateSurchargePerMin,
-            coverChargePerApp = p[Keys.COVER] ?: d.coverChargePerApp,
+            coverCharges = decodeOverrides(p[Keys.COVER]),
             // A stored blank means "no windows left", which must survive as an empty list
             // rather than falling back to the defaults the user just deleted.
             happyHours = p[Keys.HAPPY_HOURS]?.let { decodeWindows(it) } ?: d.happyHours,
@@ -54,7 +58,9 @@ class SettingsRepository(private val context: Context) {
             happyCoverChargePerApp = p[Keys.HAPPY_COVER] ?: d.happyCoverChargePerApp,
             surgeHours = p[Keys.SURGE_HOURS]?.let { decodeWindows(it) } ?: d.surgeHours,
             surgeAppCostPerMin = p[Keys.SURGE_APP] ?: d.surgeAppCostPerMin,
-            surgeCoverChargePerApp = p[Keys.SURGE_COVER] ?: d.surgeCoverChargePerApp
+            surgeCoverChargePerApp = p[Keys.SURGE_COVER] ?: d.surgeCoverChargePerApp,
+            sleepHours = p[Keys.SLEEP_HOURS]?.let { decodeWindows(it) } ?: d.sleepHours,
+            sleepOffRatePerMin = p[Keys.SLEEP_RATE] ?: d.sleepOffRatePerMin
         )
     }
 
@@ -76,13 +82,15 @@ class SettingsRepository(private val context: Context) {
             it[Keys.LOCK] = c.lockWhenBroke
             it[Keys.OVERRIDES] = encodeOverrides(c.appOverrides)
             it[Keys.PRIVATE] = c.privateSurchargePerMin
-            it[Keys.COVER] = c.coverChargePerApp
+            it[Keys.COVER] = encodeOverrides(c.coverCharges)
             it[Keys.HAPPY_HOURS] = encodeWindows(c.happyHours)
             it[Keys.HAPPY_APP] = c.happyAppCostPerMin
             it[Keys.HAPPY_COVER] = c.happyCoverChargePerApp
             it[Keys.SURGE_HOURS] = encodeWindows(c.surgeHours)
             it[Keys.SURGE_APP] = c.surgeAppCostPerMin
             it[Keys.SURGE_COVER] = c.surgeCoverChargePerApp
+            it[Keys.SLEEP_HOURS] = encodeWindows(c.sleepHours)
+            it[Keys.SLEEP_RATE] = c.sleepOffRatePerMin
         }
     }
 }

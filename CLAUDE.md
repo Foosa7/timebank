@@ -172,8 +172,17 @@ on every tick rather than scheduled, so a window boundary re-prices a session al
 progress and there are no alarms to keep in sync. Happy hour is a **cap, never a markup** —
 `costFor(pkg, happy)` and `coverCharge(happy)` take `minOf` against the normal price, so an
 app already cheaper via `appOverrides` keeps its own rate and the window can only ever lower
-a bill. `admit()` charges `coverCharge(happyHourActive, surgeActive)` so the gate can never quote
+a bill. `admit()` charges `coverFor(pkg, happyHourActive, surgeActive)` so the gate can never quote
 one price and take another.
+
+Cover charges are **opt-in per app** (`coverCharges`, a package -> money map sharing the
+overrides encoding) and the map is empty by default. `coverFor` returns 0 for an app that
+isn't listed and **returns early before the schedule is applied** — without that guard a
+surge window's floor would conjure a `$15` gate onto every app on the phone.
+
+`sleepHours` is a third schedule that moves the *earning* side: `offRateAt(now)` returns
+`sleepOffRatePerMin` inside it. It is the only schedule that touches an earn rate, so it
+is applied in the `SCREEN_OFF` branch rather than through the cap/floor pair.
 
 `service/CoverChargeOverlay.kt` — the cover charge is a one-off fee per *visit* to an app,
 taken before per-minute billing starts. The gate blocks the app until the user pays in or

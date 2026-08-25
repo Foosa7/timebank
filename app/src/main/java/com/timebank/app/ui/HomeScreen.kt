@@ -50,6 +50,7 @@ fun HomeScreen() {
     val privateSurcharge by Economy.privateSurchargeActive.collectAsState()
     val happyHour by Economy.happyHourActive.collectAsState()
     val surge by Economy.surgeActive.collectAsState()
+    val asleep by Economy.sleepActive.collectAsState()
 
     val resume = rememberResumeTick()
     val hasUsage = remember(resume) { hasUsageAccess(ctx) }
@@ -108,6 +109,13 @@ fun HomeScreen() {
                 color = Color(0xFFC62828),
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        if (asleep) {
+            Text(
+                text = "\uD83D\uDCA4  sleep hours — screen-off earns less",
+                style = MaterialTheme.typography.bodyMedium
             )
         }
 

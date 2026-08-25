@@ -41,6 +41,7 @@ import kotlinx.coroutines.withContext
  */
 @Composable
 fun AppPickerDialog(
+    title: String,
     alreadyPriced: Set<String>,
     onPick: (AppInfo) -> Unit,
     onDismiss: () -> Unit
@@ -56,7 +57,7 @@ fun AppPickerDialog(
         onDismissRequest = onDismiss,
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        title = { Text("Charge extra for…") },
+        title = { Text(title) },
         text = {
             Column {
                 OutlinedTextField(

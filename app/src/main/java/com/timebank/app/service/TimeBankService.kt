@@ -141,9 +141,11 @@ class TimeBankService : Service() {
         val now24 = LocalTime.now()
         val happy = cfg.isHappyHourAt(now24)
         val surge = cfg.isSurgeAt(now24)
+        val asleep = cfg.isSleepAt(now24)
         Economy.happyHourActive.value = happy
         Economy.surgeActive.value = surge
-        val coverCharge = cfg.coverCharge(happy, surge)
+        Economy.sleepActive.value = asleep
+        val coverCharge = cfg.coverFor(fgPkg, happy, surge)
 
         // An app that hasn't paid its cover for this visit is gated instead of billed.
         val coverDue = coverCharge > 0.0 && fgPkg != admittedPackage
@@ -152,7 +154,7 @@ class TimeBankService : Service() {
             mediaPlaying ->
                 ActivityState.MEDIA to cfg.mediaRatePerMin * cfg.earnMultiplier
             !screenOn ->
-                ActivityState.SCREEN_OFF to cfg.offRatePerMin * cfg.earnMultiplier
+                ActivityState.SCREEN_OFF to cfg.offRateAt(now24) * cfg.earnMultiplier
             isNeutral ->
                 ActivityState.NEUTRAL to cfg.idleRatePerMin * cfg.earnMultiplier
             coverDue ->
@@ -222,7 +224,7 @@ class TimeBankService : Service() {
      */
     private fun admit(pkg: String) {
         val cover = Economy.config.value
-            .coverCharge(Economy.happyHourActive.value, Economy.surgeActive.value)
+            .coverFor(pkg, Economy.happyHourActive.value, Economy.surgeActive.value)
         if (Economy.balance.value < cover) return
         val newBalance = max(0.0, Economy.balance.value - cover)
         Economy.balance.value = newBalance
@@ -290,12 +292,22 @@ class TimeBankService : Service() {
             // The balance itself is the status-bar icon, so it's visible without the shade.
             .setSmallIcon(BalanceIcon.forText(formatCompactMoney(balance)))
             .setContentTitle("Balance: " + formatMoney(balance))
-            .setContentText(stateLabel(Economy.activity.value) + "  •  " + formatRate(rate) + "/min")
+            .setContentText(
+                scheduleBadge() + stateLabel(Economy.activity.value) +
+                    "  •  " + formatRate(rate) + "/min"
+            )
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(open)
             .addAction(0, "Stop", stop)
             .build()
+    }
+
+    /** Beer while apps are cheap, a warning while they are dear; nothing the rest of the day. */
+    private fun scheduleBadge(): String = when {
+        Economy.surgeActive.value -> "\u26A0\uFE0F  "
+        Economy.happyHourActive.value -> "\uD83C\uDF7A  "
+        else -> ""
     }
 
     // --- lifecycle -----------------------------------------------------------
@@ -314,6 +326,7 @@ class TimeBankService : Service() {
         Economy.pendingCover.value = null
         Economy.happyHourActive.value = false
         Economy.surgeActive.value = false
+        Economy.sleepActive.value = false
         Economy.activity.value = ActivityState.STOPPED
         Economy.ratePerMin.value = 0.0
         Economy.privateSurchargeActive.value = false

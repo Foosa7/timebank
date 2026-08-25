@@ -1,8 +1,8 @@
 # TimeBank
 
 An Android app that turns **time into currency**. You *earn* money while your
-phone's screen is off, you pay a **cover charge** to open an app, and you *spend*
-by the minute while it's in front of you. Prices move with the clock — cheaper in
+phone's screen is off, you pay a **cover charge** to open the apps you've chosen to
+gate, and you *spend* by the minute while any app is in front of you. Prices move with the clock — cheaper in
 **happy hours**, dearer in **surge hours**. Run out, and TimeBank locks you out of
 apps until you earn more. A foreground service holds a wake lock so accounting
 keeps running with the screen off.
@@ -72,6 +72,10 @@ Metering alone never prices the *decision* to open something — a reflex glance
 almost nothing when it's billed by the second. The cover puts a number at the threshold,
 which is the one place intervention reliably works. Backing out costs nothing.
 
+- **Opt-in, per app.** The list starts empty — you pick which apps charge to open, in
+  Settings → *Cover charge*, and set each one's price. A gate in front of *everything*
+  taxes the dialler as hard as a feed, which is how the whole mechanism ends up switched
+  off. An app that isn't listed is never gated, whatever the schedule says.
 - **Per visit, not per day.** Leaving the app ends the visit; coming back pays again.
 - **No grace window yet.** Switching out to answer a text and returning 20 seconds later
   *does* re-charge. The design below argues a ~60s same-package grace period is needed
@@ -79,7 +83,7 @@ which is the one place intervention reliably works. Backing out costs nothing.
 - **Can't-afford is handled at the door.** When the balance won't cover entry, the gate
   drops the Enter button instead of quoting a price you can't pay, which is kinder than
   being walled mid-scroll at `$0`.
-- Set the cover to **`$0`** to disable the gate entirely.
+- Remove an app from the list (or set it to `$0`) to stop gating it.
 
 ### Happy hours and surge hours
 
@@ -89,10 +93,19 @@ The day carries a price schedule, in whole local hours:
 |---|---|---|---|
 | 🍺 **Happy hours** | 12:00–13:00, 19:00–20:00 | `$4`/min | `$2` |
 | ⚡ **Surge hours** | 00:00–06:00, 07:00–09:00 | `$25`/min | `$15` |
+| 💤 **Sleep hours** | 23:00–07:00 | — | — |
 
-Happy hour **caps** a price; surge **floors** it. Neither can move a price the wrong way,
+**Sleep hours** move a different number: screen-off earning drops to `$0.20`/min inside
+them. Eight hours at the full rate is a night's wage earned for doing nothing, which
+drowns out the marginal decision the economy exists to price — putting the phone down for
+twenty minutes cannot matter against `$480` of sleep money. Sleeping still pays, just not
+enough to fund the next day on its own.
+
+Happy hour **caps** an app price; surge **floors** it. Neither can move a price the wrong way,
 so an app you've priced by hand keeps its own rate unless the window is genuinely cheaper
-or dearer than it is. The floor is applied after the cap, so **surge wins any overlap**.
+or dearer than it is. The floor is applied after the cap, so **surge wins any overlap** —
+and neither can conjure a cover charge onto an app that has none, or a surge window would
+silently gate the whole phone.
 
 Windows are re-read every tick rather than scheduled, so crossing a boundary re-prices a
 session already in progress — walk into 13:00 mid-scroll and the rate changes under you.
@@ -115,7 +128,8 @@ The app draws edge-to-edge, so `TimeBankTheme` also sets `isAppearanceLightStatu
 the current theme — without it the light theme renders white-on-white and the balance (and
 the system clock along with it) disappears.
 
-The `$` is kept even at that size: a bare `83` in the status bar reads as a notification
+Happy hour and surge also badge the shade: the notification text carries a 🍺 while apps
+are cheap and a ⚠️ while they're dear. The `$` is kept even at icon size: a bare `83` in the status bar reads as a notification
 count or a stray number, and the renderer shrinks to fit, so the extra glyph costs a little
 legibility rather than any meaning.
 
@@ -256,6 +270,12 @@ The chosen fix, to be run as an experiment:
 Cutting the sleep rate to `$0.20`/min would also work, but it reads as a punishment for
 sleeping in a way settlement doesn't.
 
+**That blunter fix is what shipped**, as *sleep hours* — `$0.20`/min screen-off between
+23:00 and 07:00. It solves the magnitude problem (a night is now worth ~`$96`, not `$480`)
+without the settlement machinery, at the cost of the thing settlement was nicer about: you
+are visibly paid less for sleeping. Settlement remains the better answer and is still
+unbuilt.
+
 ### The morning: admission control, not price
 
 The wake-up scroll gets special treatment because its harm isn't proportional to duration.
@@ -357,11 +377,12 @@ land before the ideas above are tuned.
 | `$1`/min unit, ratio-derived app cost | built — defaults are `$1` earn / `$11` app cost |
 | Balance visible in the status bar | built — with the `$` kept |
 | Idle earning on the home screen | built — `$0.20`/min |
-| Cover charge at the door | built — `$5`, blocks until you pay in or leave |
+| Cover charge at the door | built — opt-in per app, blocks until you pay in or leave |
 | Cover-charge grace window | **not built** — every re-entry is charged |
 | Happy hour window | built — 12–13 and 19–20, as a price cap |
 | Scheduled surge pricing | built — 00–06 and 07–09, as a price floor |
-| 10:00 settlement of overnight earnings | not built — next experiment |
+| Lower screen-off earning during sleep hours | built — `$0.20`/min, 23:00–07:00 |
+| 10:00 settlement of overnight earnings | not built — a blunter fix is now in place |
 | Wake-anchored morning curfew + slow override | not built — surge is a *price*, not this gate |
 | Friction on Settings edits | not built |
 
@@ -376,7 +397,6 @@ to DataStore:
 | Idle earning (screen on, no app) | `$0` – `$10` /min | `$0.2` |
 | Media rate | `−$10` – `$10` /min | `$0.3` |
 | App-open cost | `$0` – `$60` /min | `$11` |
-| Cover charge (once per app open) | `$0` – `$50` | `$5` |
 | Earn multiplier | `0.1x` – `10x` | `1x` |
 | Happy hour app cost | `$0` – `$60` /min | `$4` |
 | Happy hour cover charge | `$0` – `$50` | `$2` |
@@ -384,6 +404,9 @@ to DataStore:
 | Surge app cost | `$0` – `$60` /min | `$25` |
 | Surge cover charge | `$0` – `$50` | `$15` |
 | Surge windows | whole hours, end exclusive | 00:00–06:00, 07:00–09:00 |
+| Sleep screen-off earning | `$0` – `$60` /min | `$0.2` |
+| Sleep windows | whole hours, end exclusive | 23:00–07:00 |
+| Cover charge, per app | `$0` – `$50` | none listed (no app is gated) |
 | Per-app cost | `$0` – `$60` /min | unset (uses default) |
 | Incognito surcharge | `$0` – `$60` /min | `$22` |
 | Lock apps at $0 | on / off | on |

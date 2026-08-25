@@ -47,6 +47,7 @@ fun SettingsScreen() {
     val balance by Economy.balance.collectAsState()
     val happyActive by Economy.happyHourActive.collectAsState()
     val surgeActive by Economy.surgeActive.collectAsState()
+    val sleepActive by Economy.sleepActive.collectAsState()
     val scope = rememberCoroutineScope()
 
     fun apply(newCfg: EconomyConfig) {
@@ -100,14 +101,6 @@ fun SettingsScreen() {
         ) { apply(cfg.copy(appCostPerMin = it)) }
 
         RateSlider(
-            label = "Cover charge (once per app open)",
-            value = cfg.coverChargePerApp,
-            range = 0f..50f,
-            suffix = "",
-            decimals = 1
-        ) { apply(cfg.copy(coverChargePerApp = it)) }
-
-        RateSlider(
             label = "Earn multiplier",
             value = cfg.earnMultiplier,
             range = 0.1f..10f,
@@ -152,6 +145,28 @@ fun SettingsScreen() {
             onCost = { apply(cfg.copy(surgeAppCostPerMin = it)) },
             onCover = { apply(cfg.copy(surgeCoverChargePerApp = it)) },
             onWindows = { apply(cfg.copy(surgeHours = it)) }
+        )
+
+        Spacer(Modifier.height(28.dp))
+        CoverCharges(cfg) { apply(it) }
+
+        Spacer(Modifier.height(28.dp))
+        ScheduleSection(
+            title = "Sleep hours",
+            badge = "\uD83D\uDCA4",
+            description = "Screen-off earning drops to this rate overnight. A full night " +
+                "at the normal rate is a wage earned for doing nothing, which drowns out " +
+                "everything the economy is trying to price.",
+            active = sleepActive,
+            costLabel = "Sleep screen-off earning",
+            cost = cfg.sleepOffRatePerMin,
+            coverLabel = null,
+            cover = 0.0,
+            windows = cfg.sleepHours,
+            newWindow = HourWindow(23, 7),
+            onCost = { apply(cfg.copy(sleepOffRatePerMin = it)) },
+            onCover = {},
+            onWindows = { apply(cfg.copy(sleepHours = it)) }
         )
 
         Spacer(Modifier.height(28.dp))
@@ -254,7 +269,8 @@ private fun ScheduleSection(
     active: Boolean,
     costLabel: String,
     cost: Double,
-    coverLabel: String,
+    /** Null for a schedule that only moves a rate, like sleep hours. */
+    coverLabel: String?,
     cover: Double,
     windows: List<HourWindow>,
     newWindow: HourWindow,
@@ -278,8 +294,10 @@ private fun ScheduleSection(
     RateSlider(label = costLabel, value = cost, range = 0f..60f, suffix = "/min", decimals = 1) {
         onCost(it)
     }
-    RateSlider(label = coverLabel, value = cover, range = 0f..50f, suffix = "", decimals = 1) {
-        onCover(it)
+    if (coverLabel != null) {
+        RateSlider(label = coverLabel, value = cover, range = 0f..50f, suffix = "", decimals = 1) {
+            onCover(it)
+        }
     }
 
     windows.forEachIndexed { i, window ->
@@ -339,6 +357,76 @@ private fun HourSlider(label: String, value: Int, max: Int, onChange: (Int) -> U
 private fun formatHour(h: Int): String = String.format(Locale.US, "%02d:00", h)
 
 /**
+ * Which apps charge to open, and how much. Deliberately empty until you fill it: the
+ * gate is worth having in front of the two or three apps you actually lose time to, and
+ * actively harmful in front of the dialler.
+ */
+@Composable
+private fun CoverCharges(
+    cfg: EconomyConfig,
+    apply: (EconomyConfig) -> Unit
+) {
+    val ctx = LocalContext.current
+    var picking by remember { mutableStateOf(false) }
+
+    Text(
+        "Cover charge",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold
+    )
+    Text(
+        "A one-off charge to open these apps, taken before the per-minute cost starts. " +
+            "Leaving an app ends the visit, so coming back pays again. Apps not listed " +
+            "here open free.",
+        style = MaterialTheme.typography.bodySmall
+    )
+
+    cfg.coverCharges.entries.sortedBy { labelFor(ctx, it.key).lowercase() }.forEach { (pkg, cover) ->
+        key(pkg) {
+            Column(Modifier.padding(top = 12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(labelFor(ctx, pkg), style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.weight(1f))
+                    Text(formatMoney(cover), fontWeight = FontWeight.SemiBold)
+                    TextButton(
+                        onClick = { apply(cfg.copy(coverCharges = cfg.coverCharges - pkg)) }
+                    ) { Text("Remove") }
+                }
+                Slider(
+                    value = cover.toFloat().coerceIn(0f, 50f),
+                    onValueChange = {
+                        apply(cfg.copy(coverCharges = cfg.coverCharges + (pkg to it.toDouble())))
+                    },
+                    valueRange = 0f..50f
+                )
+            }
+        }
+    }
+
+    OutlinedButton(
+        onClick = { picking = true },
+        modifier = Modifier.padding(top = 8.dp)
+    ) { Text("Add app") }
+
+    if (picking) {
+        AppPickerDialog(
+            title = "Charge to open…",
+            alreadyPriced = cfg.coverCharges.keys,
+            onPick = { app ->
+                apply(
+                    cfg.copy(coverCharges = cfg.coverCharges + (app.packageName to DEFAULT_COVER))
+                )
+                picking = false
+            },
+            onDismiss = { picking = false }
+        )
+    }
+}
+
+/** What a freshly picked app is seeded at — five minutes of restraint at the $1/min unit. */
+private const val DEFAULT_COVER = 5.0
+
+/**
  * Per-app price list. Anything not listed here is charged the default app cost,
  * so an empty list is the normal starting state rather than an error.
  */
@@ -392,6 +480,7 @@ private fun PerAppCosts(
 
     if (picking) {
         AppPickerDialog(
+            title = "Charge extra for…",
             alreadyPriced = cfg.appOverrides.keys,
             onPick = { app ->
                 // Seed at double the default so the entry does something immediately.

@@ -45,13 +45,18 @@ data class EconomyConfig(
     val lockWhenBroke: Boolean = true,   // block apps when the balance hits 0
 
     /**
-     * One-off charge for bringing an app to the foreground, taken once per visit before
-     * the per-minute cost starts. Named after a club's cover: it prices the *decision* to
-     * open something, which per-minute billing alone doesn't — a reflex glance at a feed
-     * costs nearly nothing when it is billed only by the second. Leaving the app ends the
-     * visit, so coming back pays again. 0 disables the gate entirely.
+     * Apps that charge a one-off fee to open, package name -> money. Taken once per visit
+     * before the per-minute cost starts, named after a club's cover: it prices the
+     * *decision* to open something, which per-minute billing alone doesn't — a reflex
+     * glance at a feed costs nearly nothing when it is billed only by the second. Leaving
+     * the app ends the visit, so coming back pays again.
+     *
+     * Opt-in per app, and empty by default: a gate in front of *everything* taxes the
+     * dialler and the camera as hard as a feed, which is how the whole mechanism gets
+     * switched off. An app that isn't listed here is never gated, whatever the schedule
+     * says.
      */
-    val coverChargePerApp: Double = 5.0,
+    val coverCharges: Map<String, Double> = emptyMap(),
 
     /**
      * Windows in which apps are cheap, and the two prices that apply inside them. Happy
@@ -76,6 +81,16 @@ data class EconomyConfig(
     val surgeAppCostPerMin: Double = 25.0,
     val surgeCoverChargePerApp: Double = 15.0,
 
+    /**
+     * Hours you are meant to be asleep, and the screen-off rate that applies inside them.
+     * Eight hours of sleep at the full rate is a night's wage earned unconditionally,
+     * which drowns out the marginal decision the economy is supposed to price — putting
+     * the phone down for twenty minutes cannot matter against it. Sleeping still pays,
+     * just not enough to fund the next day on its own.
+     */
+    val sleepHours: List<HourWindow> = listOf(HourWindow(23, 7)),
+    val sleepOffRatePerMin: Double = 0.2,
+
     /** Per-package cost override, package name -> money/min. Falls back to [appCostPerMin]. */
     val appOverrides: Map<String, Double> = emptyMap(),
 
@@ -98,17 +113,28 @@ data class EconomyConfig(
         return cost
     }
 
-    /** The cover charge in force, capped and floored the same way. */
-    fun coverCharge(happyHour: Boolean, surge: Boolean): Double {
-        var cover = coverChargePerApp
+    /**
+     * What it costs to open [pkg] right now, capped and floored the same way. An app with
+     * no cover of its own stays at 0 — the schedule may only move a charge that already
+     * exists, never conjure one, or a surge window would silently gate the whole phone.
+     */
+    fun coverFor(pkg: String?, happyHour: Boolean, surge: Boolean): Double {
+        var cover = coverCharges[pkg] ?: return 0.0
+        if (cover <= 0.0) return 0.0
         if (happyHour) cover = minOf(cover, happyCoverChargePerApp)
         if (surge) cover = maxOf(cover, surgeCoverChargePerApp)
         return cover
     }
 
+    /** The screen-off earning rate for the time of day, before the multiplier. */
+    fun offRateAt(time: LocalTime): Double =
+        if (isSleepAt(time)) sleepOffRatePerMin else offRatePerMin
+
     fun isHappyHourAt(time: LocalTime): Boolean = happyHours.any { it.contains(time) }
 
     fun isSurgeAt(time: LocalTime): Boolean = surgeHours.any { it.contains(time) }
+
+    fun isSleepAt(time: LocalTime): Boolean = sleepHours.any { it.contains(time) }
 }
 
 /**
@@ -135,6 +161,9 @@ object Economy {
 
     /** Whether a [EconomyConfig.surgeHours] window is running right now. */
     val surgeActive = MutableStateFlow(false)
+
+    /** Whether a [EconomyConfig.sleepHours] window is running right now. */
+    val sleepActive = MutableStateFlow(false)
 
     /**
      * Packages that currently have a private / incognito browsing session open, as
