@@ -48,6 +48,8 @@ fun HomeScreen() {
     val locked by Economy.locked.collectAsState()
     val pkg by Economy.currentPackage.collectAsState()
     val privateSurcharge by Economy.privateSurchargeActive.collectAsState()
+    val happyHour by Economy.happyHourActive.collectAsState()
+    val surge by Economy.surgeActive.collectAsState()
 
     val resume = rememberResumeTick()
     val hasUsage = remember(resume) { hasUsageAccess(ctx) }
@@ -90,6 +92,24 @@ fun HomeScreen() {
             text = label,
             style = MaterialTheme.typography.bodyMedium
         )
+
+        if (happyHour) {
+            Text(
+                text = "\uD83C\uDF7A  happy hour — apps are cheap",
+                color = Color(0xFF2E7D32),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        if (surge) {
+            Text(
+                text = "\u26A1  surge — apps cost more right now",
+                color = Color(0xFFC62828),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
 
         if (privateSurcharge) {
             Text(

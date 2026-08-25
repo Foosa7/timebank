@@ -20,6 +20,7 @@ import com.timebank.app.MainActivity
 import com.timebank.app.data.ActivityState
 import com.timebank.app.data.AppGraph
 import com.timebank.app.data.Economy
+import com.timebank.app.data.labelFor
 import com.timebank.app.util.formatCompactMoney
 import com.timebank.app.util.formatMoney
 import com.timebank.app.util.formatRate
@@ -32,6 +33,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.time.LocalTime
 import kotlin.math.max
 
 /**
@@ -46,12 +48,20 @@ class TimeBankService : Service() {
     private lateinit var powerManager: PowerManager
     private lateinit var fgMonitor: ForegroundAppMonitor
     private lateinit var lockOverlay: LockOverlay
+    private lateinit var coverOverlay: CoverChargeOverlay
     private var wakeLock: PowerManager.WakeLock? = null
     private var tickJob: Job? = null
 
     private var lastTickMs = 0L
     private var persistCounter = 0
     private var launcherPackage: String? = null
+
+    /**
+     * The one package whose cover charge is paid up for the current visit. Cleared the
+     * moment the phone leaves that app, which is what makes the charge per-visit rather
+     * than per-install.
+     */
+    private var admittedPackage: String? = null
 
     /** Persist immediately whenever the screen turns off/on (a natural checkpoint). */
     private val screenReceiver = object : BroadcastReceiver() {
@@ -67,6 +77,7 @@ class TimeBankService : Service() {
         powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         fgMonitor = ForegroundAppMonitor(this)
         lockOverlay = LockOverlay(this)
+        coverOverlay = CoverChargeOverlay(this)
         launcherPackage = resolveLauncherPackage()
         createChannel()
         val filter = IntentFilter().apply {
@@ -125,18 +136,36 @@ class TimeBankService : Service() {
             fgPkg != null && fgPkg in Economy.privatePackages.value &&
                 cfg.privateSurchargePerMin > 0.0
 
+        // Happy hour is re-read every tick rather than scheduled, so crossing into or out
+        // of a window takes effect on the next tick with no alarms to keep in sync.
+        val now24 = LocalTime.now()
+        val happy = cfg.isHappyHourAt(now24)
+        val surge = cfg.isSurgeAt(now24)
+        Economy.happyHourActive.value = happy
+        Economy.surgeActive.value = surge
+        val coverCharge = cfg.coverCharge(happy, surge)
+
+        // An app that hasn't paid its cover for this visit is gated instead of billed.
+        val coverDue = coverCharge > 0.0 && fgPkg != admittedPackage
+
         val (state, ratePerMin) = when {
             mediaPlaying ->
                 ActivityState.MEDIA to cfg.mediaRatePerMin * cfg.earnMultiplier
             !screenOn ->
                 ActivityState.SCREEN_OFF to cfg.offRatePerMin * cfg.earnMultiplier
             isNeutral ->
-                ActivityState.NEUTRAL to 0.0
+                ActivityState.NEUTRAL to cfg.idleRatePerMin * cfg.earnMultiplier
+            coverDue ->
+                ActivityState.COVER to 0.0
             else -> {
                 val surcharge = if (privateNow) cfg.privateSurchargePerMin else 0.0
-                ActivityState.APP to -(cfg.costFor(fgPkg) + surcharge)
+                ActivityState.APP to -(cfg.costFor(fgPkg, happy, surge) + surcharge)
             }
         }
+
+        // Any state but "in an app" ends the visit, so the next entry pays again. Note
+        // fgPkg is null while the screen is off, so this also covers pocketing the phone.
+        if (state != ActivityState.APP && state != ActivityState.COVER) admittedPackage = null
 
         // Only meaningful while actually being charged for an app.
         Economy.privateSurchargeActive.value = privateNow && state == ActivityState.APP
@@ -151,12 +180,58 @@ class TimeBankService : Service() {
         Economy.locked.value = broke
         if (broke) lockOverlay.show() else lockOverlay.hide()
 
+        // Raise or drop the cover-charge gate. Only one overlay is ever up: the states
+        // are mutually exclusive, so a gated app is never also "broke".
+        Economy.pendingCover.value = if (state == ActivityState.COVER) fgPkg else null
+        if (state == ActivityState.COVER && fgPkg != null) {
+            val pkg = fgPkg
+            coverOverlay.show(
+                CoverChargeOverlay.Offer(
+                    packageName = pkg,
+                    label = labelFor(this, pkg),
+                    cover = coverCharge,
+                    ratePerMin = cfg.costFor(pkg, happy, surge) +
+                        (if (privateNow) cfg.privateSurchargePerMin else 0.0),
+                    balance = newBalance,
+                    // Surge wins the label too, matching which one won the price.
+                    pricingNote = when {
+                        surge -> "\u26A1  Surge pricing"
+                        happy -> "\uD83C\uDF7A  Happy hour pricing"
+                        else -> null
+                    }
+                ),
+                onEnter = { admit(pkg) },
+                onDecline = { coverOverlay.hide() }
+            )
+        } else {
+            coverOverlay.hide()
+        }
+
         if (++persistCounter >= PERSIST_EVERY_TICKS) {
             persistCounter = 0
             scope.launch(Dispatchers.IO) {
                 AppGraph.settings.saveBalance(newBalance)
             }
         }
+    }
+
+    /**
+     * Pay the cover for [pkg] and let it through. Runs on the main thread from the
+     * overlay's button, so it only touches the thread-safe [Economy] flows; the next
+     * tick picks the admission up and starts per-minute billing.
+     */
+    private fun admit(pkg: String) {
+        val cover = Economy.config.value
+            .coverCharge(Economy.happyHourActive.value, Economy.surgeActive.value)
+        if (Economy.balance.value < cover) return
+        val newBalance = max(0.0, Economy.balance.value - cover)
+        Economy.balance.value = newBalance
+        admittedPackage = pkg
+        Economy.pendingCover.value = null
+        coverOverlay.hide()
+        // A one-off charge is worth checkpointing straight away rather than waiting for
+        // the next lazy write — losing it would hand out a free visit.
+        scope.launch(Dispatchers.IO) { AppGraph.settings.saveBalance(newBalance) }
     }
 
     private fun resolveLauncherPackage(): String? {
@@ -232,8 +307,13 @@ class TimeBankService : Service() {
         tickJob?.cancel()
         releaseWakeLock()
         lockOverlay.hide()
+        coverOverlay.hide()
+        admittedPackage = null
         Economy.serviceRunning.value = false
         Economy.locked.value = false
+        Economy.pendingCover.value = null
+        Economy.happyHourActive.value = false
+        Economy.surgeActive.value = false
         Economy.activity.value = ActivityState.STOPPED
         Economy.ratePerMin.value = 0.0
         Economy.privateSurchargeActive.value = false
@@ -245,12 +325,14 @@ class TimeBankService : Service() {
         tickJob?.cancel()
         releaseWakeLock()
         lockOverlay.hide()
+        coverOverlay.hide()
         try {
             unregisterReceiver(screenReceiver)
         } catch (_: Exception) {
         }
         Economy.serviceRunning.value = false
         Economy.locked.value = false
+        Economy.pendingCover.value = null
         scope.cancel()
         super.onDestroy()
     }

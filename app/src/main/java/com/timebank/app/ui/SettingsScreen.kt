@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -27,20 +28,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.timebank.app.data.AppGraph
 import com.timebank.app.data.labelFor
 import com.timebank.app.data.Economy
 import com.timebank.app.data.EconomyConfig
+import com.timebank.app.data.HourWindow
 import com.timebank.app.util.formatMoney
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.Locale
+import kotlin.math.roundToInt
 
 @Composable
 fun SettingsScreen() {
     val cfg by Economy.config.collectAsState()
     val balance by Economy.balance.collectAsState()
+    val happyActive by Economy.happyHourActive.collectAsState()
+    val surgeActive by Economy.surgeActive.collectAsState()
     val scope = rememberCoroutineScope()
 
     fun apply(newCfg: EconomyConfig) {
@@ -70,6 +76,14 @@ fun SettingsScreen() {
         ) { apply(cfg.copy(offRatePerMin = it)) }
 
         RateSlider(
+            label = "Idle earning (screen on, no app)",
+            value = cfg.idleRatePerMin,
+            range = 0f..10f,
+            suffix = "/min",
+            decimals = 1
+        ) { apply(cfg.copy(idleRatePerMin = it)) }
+
+        RateSlider(
             label = "Media (YouTube / music) rate",
             value = cfg.mediaRatePerMin,
             range = -10f..10f,
@@ -86,6 +100,14 @@ fun SettingsScreen() {
         ) { apply(cfg.copy(appCostPerMin = it)) }
 
         RateSlider(
+            label = "Cover charge (once per app open)",
+            value = cfg.coverChargePerApp,
+            range = 0f..50f,
+            suffix = "",
+            decimals = 1
+        ) { apply(cfg.copy(coverChargePerApp = it)) }
+
+        RateSlider(
             label = "Earn multiplier",
             value = cfg.earnMultiplier,
             range = 0.1f..10f,
@@ -94,6 +116,43 @@ fun SettingsScreen() {
             decimals = 1
         ) { apply(cfg.copy(earnMultiplier = it)) }
 
+
+        Spacer(Modifier.height(28.dp))
+        ScheduleSection(
+            title = "Happy hours",
+            badge = "\uD83C\uDF7A",
+            description = "Inside these windows apps are cheaper. Happy hour only ever " +
+                "lowers a price, so an app already priced below these keeps its own rate.",
+            active = happyActive,
+            costLabel = "Happy hour app cost",
+            cost = cfg.happyAppCostPerMin,
+            coverLabel = "Happy hour cover charge",
+            cover = cfg.happyCoverChargePerApp,
+            windows = cfg.happyHours,
+            newWindow = HourWindow(12, 13),
+            onCost = { apply(cfg.copy(happyAppCostPerMin = it)) },
+            onCover = { apply(cfg.copy(happyCoverChargePerApp = it)) },
+            onWindows = { apply(cfg.copy(happyHours = it)) }
+        )
+
+        Spacer(Modifier.height(28.dp))
+        ScheduleSection(
+            title = "Surge hours",
+            badge = "\u26A1",
+            description = "The opposite of happy hour — apps cost more, for the times " +
+                "you would rather not be on the phone at all. Surge only ever raises a " +
+                "price, and it beats happy hour where the two overlap.",
+            active = surgeActive,
+            costLabel = "Surge app cost",
+            cost = cfg.surgeAppCostPerMin,
+            coverLabel = "Surge cover charge",
+            cover = cfg.surgeCoverChargePerApp,
+            windows = cfg.surgeHours,
+            newWindow = HourWindow(0, 6),
+            onCost = { apply(cfg.copy(surgeAppCostPerMin = it)) },
+            onCover = { apply(cfg.copy(surgeCoverChargePerApp = it)) },
+            onWindows = { apply(cfg.copy(surgeHours = it)) }
+        )
 
         Spacer(Modifier.height(28.dp))
         PerAppCosts(cfg) { apply(it) }
@@ -177,6 +236,107 @@ private fun RateSlider(
         )
     }
 }
+
+/**
+ * One time-of-day price schedule — happy hours or their surge mirror. Hours are whole
+ * local hours and the end is exclusive, which is why the end slider runs to 24: "22 → 24"
+ * is the last two hours of the day. A window whose ends are equal covers nothing, so it
+ * can be parked without deleting it.
+ *
+ * Both schedules are the same control, so they get the same composable rather than two
+ * that can drift apart.
+ */
+@Composable
+private fun ScheduleSection(
+    title: String,
+    badge: String,
+    description: String,
+    active: Boolean,
+    costLabel: String,
+    cost: Double,
+    coverLabel: String,
+    cover: Double,
+    windows: List<HourWindow>,
+    newWindow: HourWindow,
+    onCost: (Double) -> Unit,
+    onCover: (Double) -> Unit,
+    onWindows: (List<HourWindow>) -> Unit
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        if (active) {
+            Spacer(Modifier.width(8.dp))
+            Text("$badge on now", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    Text(description, style = MaterialTheme.typography.bodySmall)
+
+    RateSlider(label = costLabel, value = cost, range = 0f..60f, suffix = "/min", decimals = 1) {
+        onCost(it)
+    }
+    RateSlider(label = coverLabel, value = cover, range = 0f..50f, suffix = "", decimals = 1) {
+        onCover(it)
+    }
+
+    windows.forEachIndexed { i, window ->
+        key(i) {
+            Column(Modifier.padding(top = 12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        formatHour(window.startHour) + " → " + formatHour(window.endHour),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.weight(1f))
+                    TextButton(
+                        onClick = { onWindows(windows.filterIndexed { j, _ -> j != i }) }
+                    ) { Text("Remove") }
+                }
+                HourSlider("Start", window.startHour, 23) { h ->
+                    onWindows(windows.replaceAt(i, window.copy(startHour = h)))
+                }
+                HourSlider("End", window.endHour, 24) { h ->
+                    onWindows(windows.replaceAt(i, window.copy(endHour = h)))
+                }
+            }
+        }
+    }
+
+    OutlinedButton(
+        onClick = { onWindows(windows + newWindow) },
+        modifier = Modifier.padding(top = 8.dp)
+    ) { Text("Add window") }
+}
+
+private fun <T> List<T>.replaceAt(index: Int, value: T): List<T> =
+    mapIndexed { i, existing -> if (i == index) value else existing }
+
+/** Hours are whole numbers, so the slider gets steps and snaps rather than sliding smoothly. */
+@Composable
+private fun HourSlider(label: String, value: Int, max: Int, onChange: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(44.dp))
+        Slider(
+            value = value.coerceIn(0, max).toFloat(),
+            onValueChange = { onChange(it.roundToInt()) },
+            valueRange = 0f..max.toFloat(),
+            steps = max - 1,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            formatHour(value),
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.width(56.dp),
+            textAlign = TextAlign.End
+        )
+    }
+}
+
+private fun formatHour(h: Int): String = String.format(Locale.US, "%02d:00", h)
 
 /**
  * Per-app price list. Anything not listed here is charged the default app cost,

@@ -14,14 +14,16 @@ fun formatRate(v: Double): String {
 }
 
 /**
- * The balance squeezed down for the status-bar icon, which is a 24dp square: no currency
- * sign, no decimals, and abbreviated past a thousand so a full day's earnings still fit.
+ * The balance squeezed down for the status-bar icon, which is a 24dp square: no decimals,
+ * and abbreviated past a thousand so a full day's earnings still fit. The "$" is kept —
+ * a bare "83" in the status bar reads as a notification count or a stray number, and the
+ * icon renderer shrinks to fit, so the extra glyph costs legibility rather than meaning.
  */
 fun formatCompactMoney(v: Double): String {
     // Thresholds are where each bucket *rounds up* into the next, not the round numbers,
     // so nothing ever renders as "1000" or "10.0k" on its way over a boundary.
     val n = abs(v)
-    return when {
+    return "$" + when {
         n < 999.5 -> String.format(Locale.US, "%.0f", n)
         n < 9_950 -> String.format(Locale.US, "%.1fk", n / 1_000)
         n < 999_500 -> String.format(Locale.US, "%.0fk", n / 1_000)
@@ -35,4 +37,5 @@ fun stateLabel(state: ActivityState): String = when (state) {
     ActivityState.MEDIA -> "Media playing"
     ActivityState.APP -> "App open — spending"
     ActivityState.NEUTRAL -> "Home / TimeBank — idle"
+    ActivityState.COVER -> "Cover charge — waiting"
 }
