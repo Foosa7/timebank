@@ -226,11 +226,42 @@ blocked never posts it, so the surcharge silently never fires.
 to the main-thread `Handler` because the service ticks on `Dispatchers.Default`. Silently
 no-ops without `SYSTEM_ALERT_WINDOW`.
 
-`ui/` — two screens (`HomeScreen`, `SettingsScreen`) switched by an index in
-`MainActivity`, no navigation library. Permission state is not observable, so
+`ui/` — four screens (`HomeScreen`, `ChargesScreen`, `ReportScreen`, `SettingsScreen`)
+switched by an index in `MainActivity`, no navigation library. Permission state is not observable, so
 `ui/Support.kt` exposes `rememberResumeTick()` plus plain `has*` checks; UI keys permission
 reads on that tick to re-check after the user returns from a system Settings screen. Any new
 permission needs a `has*` predicate there and a `PermissionCard` wired to the same pattern.
+
+`data/UsageHistory.kt` + `data/Pricing.kt` — the calibration path, and the one place that
+reads Android's records rather than the app's own. Minutes come from `queryUsageStats`
+daily buckets; visits and everything time-of-day come from `queryEvents`, whose retention
+is **far shorter** (about a week against the buckets' ten days or more on the phones
+tested). That asymmetry is load-bearing: `Baseline.meanSessionMin` divides
+`recentMinutesPerDay` by `visitsPerDay` so both halves cover the same days, and dividing
+the long average by the short one silently reports a number that is not a session length.
+A "visit" is a change of foreground **package**, not each `MOVE_TO_FOREGROUND` — that
+fires per activity, and counting it raw reported 284 Instagram visits on a day the
+system's own launch counter said 61, a 4.7x error landing straight on
+`coverEquivalentPerMin`. `UsageStats.getAppLaunchCount()` exists in AOSP but is **not
+public API**, which is why visits come from events at all.
+
+`Pricing.kt` is pure arithmetic over `EconomyConfig` — no Android, no state, no I/O — and
+holds the equilibrium `U* = (m·r_sleep·S + m·r̄·(DAY − S)) / (P + C̄/L̄ + m·r̄)`, its
+inversion, and `recommend()`. Two rules there are deliberate and easy to undo by accident:
+surge windows are never proposed over an hour a happy window already owns (surge wins
+overlaps, so it would cancel the release valve), and no window is proposed at all unless
+the busiest hour clears twice the median — "above average" selects something on any
+distribution, however flat.
+
+`data/LlmClient.kt` — one `HttpURLConnection` + `org.json` path for all three providers, so
+there is **no networking or JSON dependency**; keep it that way. Each provider differs in
+ways that fail quietly: Anthropic returns thinking blocks in the same `content` array
+(filter `type == "text"`), Gemini puts the model in the URL path, its system prompt in a
+top-level `systemInstruction`, and its reasoning in the same `parts` array flagged
+`thought` (filter it). Gemini's key goes in an `x-goog-api-key` header rather than the
+`?key=` query string the docs reach for, verified against the live API — a key in a URL
+ends up in logs. The model **never writes config**; `ReportScreen` renders text and
+nothing else.
 
 ## Conventions
 

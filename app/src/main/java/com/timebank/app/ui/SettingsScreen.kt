@@ -68,6 +68,10 @@ fun SettingsScreen() {
         )
         Spacer(Modifier.height(16.dp))
 
+        CalibrationCard(cfg) { apply(it) }
+
+        Spacer(Modifier.height(8.dp))
+
         RateSlider(
             label = "Screen-off earning",
             value = cfg.offRatePerMin,
