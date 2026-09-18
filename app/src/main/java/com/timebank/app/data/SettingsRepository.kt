@@ -37,6 +37,13 @@ class SettingsRepository(private val context: Context) {
         val SURGE_COVER = doublePreferencesKey("surge_cover_charge")
         val SLEEP_HOURS = stringPreferencesKey("sleep_hours")
         val SLEEP_RATE = doublePreferencesKey("sleep_off_rate")
+        // Report settings. Separate from the economy keys above because nothing here is
+        // read by the service, and an API key has no business on the path of a slider drag.
+        val LLM_PROVIDER = stringPreferencesKey("llm_provider")
+        val LLM_KEY = stringPreferencesKey("llm_api_key")
+        val LLM_MODEL = stringPreferencesKey("llm_model")
+        val LLM_PROMPT = stringPreferencesKey("llm_system_prompt")
+        val LLM_GOAL = stringPreferencesKey("llm_goal")
     }
 
     val configFlow: Flow<EconomyConfig> = context.dataStore.data.map { p ->
@@ -62,6 +69,33 @@ class SettingsRepository(private val context: Context) {
             sleepHours = p[Keys.SLEEP_HOURS]?.let { decodeWindows(it) } ?: d.sleepHours,
             sleepOffRatePerMin = p[Keys.SLEEP_RATE] ?: d.sleepOffRatePerMin
         )
+    }
+
+    val llmConfigFlow: Flow<LlmConfig> = context.dataStore.data.map { p ->
+        // Matched by name across the whole enum rather than branch by branch, so adding a
+        // provider does not silently decode to Anthropic for anyone who had it selected.
+        val provider = LlmProvider.entries.firstOrNull { it.name == p[Keys.LLM_PROVIDER] }
+            ?: LlmProvider.ANTHROPIC
+        LlmConfig(
+            provider = provider,
+            apiKey = p[Keys.LLM_KEY].orEmpty(),
+            model = p[Keys.LLM_MODEL]?.takeIf { it.isNotBlank() }
+                ?: LlmConfig().defaultModelFor(provider),
+            // Blank is meaningful: it means "use the default", so an improved default
+            // reaches anyone who has not written their own.
+            systemPrompt = p[Keys.LLM_PROMPT].orEmpty(),
+            goal = p[Keys.LLM_GOAL].orEmpty()
+        )
+    }
+
+    suspend fun saveLlmConfig(c: LlmConfig) {
+        context.dataStore.edit {
+            it[Keys.LLM_PROVIDER] = c.provider.name
+            it[Keys.LLM_KEY] = c.apiKey
+            it[Keys.LLM_MODEL] = c.model
+            it[Keys.LLM_PROMPT] = c.systemPrompt
+            it[Keys.LLM_GOAL] = c.goal
+        }
     }
 
     /** Null when nothing has ever been saved — a real stored $0 comes back as 0.0. */

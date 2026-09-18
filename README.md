@@ -374,6 +374,10 @@ land before the ideas above are tuned.
 | Per-app prices, incognito surcharge, media precedence | built |
 | Lock at `$0` with home-screen escape | built |
 | Session/lockout instrumentation | **not built** — do this first |
+| Calibration from existing usage history | built — measured baseline, solved price, inferred sleep window |
+| Per-app charges ranked by measured use | built — with the cover/meter unit conversion shown |
+| LLM report over a measured digest | built — Claude / OpenAI / Gemini, report only, never writes config |
+| Closed-loop controller on the earn/spend ratio | not built — needs the instrumentation above |
 | `$1`/min unit, ratio-derived app cost | built — defaults are `$1` earn / `$11` app cost |
 | Balance visible in the status bar | built — with the `$` kept |
 | Idle earning on the home screen | built — `$0.20`/min |
@@ -385,6 +389,120 @@ land before the ideas above are tuned.
 | 10:00 settlement of overnight earnings | not built — a blunter fix is now in place |
 | Wake-anchored morning curfew + slow override | not built — surge is a *price*, not this gate |
 | Friction on Settings edits | not built |
+
+## Calibrating from your history
+
+A fresh install used to ship the worked example below — `$11`/min, derived from a two-hour
+target picked to make the arithmetic readable — and you had no way to know whether that was
+loose, tight or absurd for you until weeks had gone by.
+
+Android has been recording the answer all along. The **Settings** tab reads its own daily
+usage buckets and event stream through the Usage access permission TimeBank already holds,
+and prices the economy against what you actually do:
+
+```
+Over the last 10 days you averaged 7.3 h a day in apps.
+Over the last 8 days that was 444 app opens a day — about 1.0 min a visit.
+  Instagram    4.5 h/day
+  WhatsApp      55 min/day
+  Edge Canary   22 min/day
+
+At $11.0/min this economy settles at 1.3 h a day.
+
+Recommended
+  •  App cost $11.0/min → $2.0/min
+  •  Sleep hours 23–07 → 03–10
+       Your longest unbroken screen-off stretch, over 8 days of events.
+            [ Apply 2 changes ]
+```
+
+The two windows are not the same length and the card says so. Per-app *minutes* come from
+daily buckets that survive a week or more; *visit counts* need the raw event stream, which is
+kept for about seven days. Session length divides one by the other, so both halves are taken
+over the same days — dividing a three-month minute average by a one-week visit average is not
+a session length at all.
+
+Three things it measures rather than assumes: your sleep window, from the longest unbroken
+screen-off stretch of each day; your visit counts, as changes of foreground *package* rather
+than raw foreground events (`MOVE_TO_FOREGROUND` fires per activity, so counting it raw
+reported 284 Instagram visits on a day that had 61); and the neutral fraction, which moves the
+equilibrium by about a third between plausible values.
+
+It will not propose a happy hour. Happy hour is a release valve and its placement follows
+where phone use costs your life the least — that is a question about your life, not your
+histogram. It also refuses to propose surge windows at all unless your busiest hour runs at
+least twice your median one, because "above average" always selects something no matter how
+flat the day is.
+
+### The maths
+
+`data/Pricing.kt` is the economy solved backwards. Over a day of 1440 minutes, with `S`
+minutes of sleep, `U` minutes of metered use and the rest split between screen-off and neutral
+at an effective rate `r̄`:
+
+```
+earned = m·r_sleep·S + m·r̄·(1440 − S − U)
+spent  = P·U + C̄·U/L̄
+
+                m·r_sleep·S + m·r̄·(1440 − S)
+       U*  =  ────────────────────────────────
+                     P  +  C̄/L̄  +  m·r̄
+```
+
+Two things fall out of that. A cover charge and the meter are **the same instrument in
+different units** — a `$5` cover on four-minute visits is worth `$1.25`/min, the same cover on
+forty-minute visits only `$0.125`/min, which is the frequency-versus-duration argument made
+quantitative. And `U*` is a **capacity, not a prediction**: it says what the economy can
+sustain, not what you will do. A ceiling above your head does nothing, the lock never fires,
+and the fix is a lower target rather than a higher price.
+
+## Charges
+
+Your apps ranked by how much of your time they actually take, rather than alphabetically. On a
+phone where one app is 60% of all screen time, a launcher-ordered picker buries the only row
+worth editing.
+
+```
+Instagram
+4.5 h/day · 62% of your time · 2.8 min a visit          $5.0/min
+                                                   + $10.0 to open
+That cover is worth $3.6/min at your visit length,
+and about $968.50 a day at 97 visits.
+```
+
+Every row shows both instruments and what each is worth in the other's unit, because that
+conversion is the whole point — the same `$5` is a mild toll on a feed and a punitive one on
+an app you touch for forty seconds. Rows with short visits say so explicitly.
+
+## Report
+
+Hands the measurements to an LLM and asks what it makes of them. **Claude, OpenAI or Gemini**,
+your key, your choice of model — one `HttpURLConnection` path and `org.json`, both already in
+the platform, so it adds no dependency and no APK weight.
+
+This is the outer loop of the design. The arithmetic above handles the part that is a solved
+scalar problem; the model handles the part that is not — which knob to reach for, whether a
+habit has shifted, what a number means for your week. **It returns a report, never a config.**
+Nothing on that screen writes a price, which is what keeps a hallucinated number from becoming
+one without anyone looking at it.
+
+- **The payload is shown in full before it is sent.** App labels and the derived arithmetic,
+  a few kilobytes, no event stream. Usage data is personal enough that "trust me" is the wrong
+  design, and a preview is cheaper than a policy.
+- **The brief is editable**, and blank means the built-in one — so an improved default reaches
+  anyone who has not written their own.
+- **There is a goal field**, and it matters more than the brief. The digest says what you do
+  and never why it bothers you; without that the report can only be generic.
+
+The built-in brief spends most of its length on *why* rather than *what*. A model told only
+how the app works reasons about it as a generic screen-time tool and returns generic
+screen-time advice — block the bad app, raise the price, set a limit. It is told what is
+actually being maximised, why the instrument is price and not a wall, that happy hour is a cap
+and surge a floor, and that a lockout every session is a failure rather than a success.
+
+The API key is stored **unencrypted** in the app's private data. That is safe from other apps
+on an unrooted phone and is not safe from an unlocked one, root, or an ADB backup. Use a key
+scoped to this app that you can revoke.
 
 ## Settings
 
@@ -476,11 +594,18 @@ share one in-memory `Economy` object instead of talking over IPC.
 
 ```
 TimeBankApp.kt             seeds balance from disk, mirrors stored config into Economy
-MainActivity.kt            two-tab Compose shell (Home / Settings)
+MainActivity.kt            four-tab Compose shell (Home / Charges / Report / Settings)
 
 data/Economy.kt            enums, EconomyConfig, shared StateFlow state
-data/SettingsRepository.kt DataStore persistence (config + balance)
+data/SettingsRepository.kt DataStore persistence (config + balance + LLM settings)
 data/AppGraph.kt           one-field service locator for the repository
+data/UsageHistory.kt       reads Android's own usage buckets + event stream ->
+                           baseline, visit counts, hour histogram, sleep window
+data/Pricing.kt            the economy solved backwards: equilibrium, target -> price,
+                           cover/meter unit conversion, the recommendation (pure, no Android)
+data/LlmConfig.kt          provider, key, model, editable brief, goal
+data/Digest.kt             the measured payload sent for a report
+data/LlmClient.kt          one HTTP path for Claude / OpenAI / Gemini
 
 service/TimeBankService.kt foreground service: wake lock + tick loop + accounting
 service/ForegroundAppMonitor.kt   UsageStats -> current foreground package
@@ -493,6 +618,9 @@ service/BalanceIcon.kt     renders the balance into the status-bar notification 
 ui/HomeScreen.kt           balance, live rate, start/stop, permission cards
 ui/SettingsScreen.kt       rate/cost/multiplier sliders, happy/surge schedules,
                            per-app prices, lock switch
+ui/CalibrationCard.kt      measured baseline -> solved price and schedule, with its working
+ui/ChargesScreen.kt        apps ranked by measured use, meter + cover per app
+ui/ReportScreen.kt         provider/key/model, payload preview, editable brief, the report
 ui/AppPickerDialog.kt      searchable installed-app picker
 data/InstalledApps.kt      launchable apps + labels for the picker
 ui/Support.kt              permission checks + re-check-on-resume helper

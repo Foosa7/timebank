@@ -15,7 +15,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.timebank.app.ui.ChargesScreen
 import com.timebank.app.ui.HomeScreen
+import com.timebank.app.ui.ReportScreen
 import com.timebank.app.ui.SettingsScreen
 import com.timebank.app.ui.theme.TimeBankTheme
 
@@ -41,6 +43,18 @@ private fun AppRoot() {
                 NavigationBarItem(
                     selected = tab == 1,
                     onClick = { tab = 1 },
+                    icon = { Text("🎟") },
+                    label = { Text("Charges") }
+                )
+                NavigationBarItem(
+                    selected = tab == 2,
+                    onClick = { tab = 2 },
+                    icon = { Text("📊") },
+                    label = { Text("Report") }
+                )
+                NavigationBarItem(
+                    selected = tab == 3,
+                    onClick = { tab = 3 },
                     icon = { Text("⚙️") },
                     label = { Text("Settings") }
                 )
@@ -50,6 +64,8 @@ private fun AppRoot() {
         Box(Modifier.padding(padding)) {
             when (tab) {
                 0 -> HomeScreen()
+                1 -> ChargesScreen()
+                2 -> ReportScreen()
                 else -> SettingsScreen()
             }
         }
