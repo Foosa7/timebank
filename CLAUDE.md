@@ -33,19 +33,33 @@ check which one you are on before trusting a path:
 | **the Fedora laptop** | `~/Android/Sdk` | none — export `ANDROID_HOME` | `timebank` (API 35, `google_apis`), `-gpu host` only |
 
 What is the same on both is Java: everything under `/usr/lib/jvm` is a **JRE with no
-`javac`** (including `java-25-openjdk`), so Gradle fails with "Toolchain installation ...
-does not provide the required capabilities: [JAVA_COMPILER]". Unpack a Temurin 21 JDK into
-the session scratchpad and build with:
+`javac`** (all five, including `java-25-openjdk`), so Gradle fails with "Toolchain
+installation ... does not provide the required capabilities: [JAVA_COMPILER]".
+
+A Temurin 21 JDK lives at **`~/jdk/jdk-21.0.12.1+1`** on this box — outside the session
+scratchpad deliberately, so it survives between sessions instead of being re-downloaded
+(345 MB) every time:
 
 ```
-export JAVA_HOME=<scratchpad>/jdk/jdk-21.0.12.1+1
+export JAVA_HOME=$HOME/jdk/jdk-21.0.12.1+1
 export ANDROID_HOME=$HOME/android-sdk    # ~/Android/Sdk on the Fedora laptop
 ./gradlew assembleDebug          # ~40s warm / ~70s cold, APK -> app/build/outputs/apk/debug/
 ```
 
-If the scratchpad JDK is gone, re-fetch one (`curl -fsSL
-https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse`) — do
-not point `JAVA_HOME` at `/usr/lib/jvm/*`, none of them can compile.
+`./gradlew -q javaToolchains` confirms which one Gradle actually picked, and is the fastest
+way to tell a `JAVA_HOME` that did not take from a real build problem.
+
+If that directory is missing — a fresh machine, or the Fedora laptop, which needs its own
+copy — re-fetch and unpack one:
+
+```
+mkdir -p ~/jdk && curl -fsSL \
+  https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse \
+  | tar xz -C ~/jdk
+```
+
+Do **not** point `JAVA_HOME` at `/usr/lib/jvm/*`, none of them can compile. CI does not use
+any of this — the workflow installs its own JDK through `actions/setup-java`.
 
 SDK platform 37.0 and build-tools 37.0.0 are installed (the platform directory is
 `android-37.0`, matching `compileSdk = 37`). Two deprecation warnings — `MOVE_TO_FOREGROUND`
