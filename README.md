@@ -364,7 +364,8 @@ All three of those dials are currently tuned blind. The service already knows ev
 every lockout, every session length and every balance trough — and records none of it.
 There is no way to tell whether a configuration is working, and no way to notice a nudge
 decaying. **Logging the accounting loop is worth more than any pricing change**, and should
-land before the ideas above are tuned.
+land before the ideas above are tuned. [The optimiser](#the-optimiser) sets out what would be
+built on top of it, and why logging is the piece with a deadline attached.
 
 ### Status
 
@@ -373,11 +374,12 @@ land before the ideas above are tuned.
 | Continuous metering, `elapsedRealtime` accounting | built |
 | Per-app prices, incognito surcharge, media precedence | built |
 | Lock at `$0` with home-screen escape | built |
-| Session/lockout instrumentation | **not built** — do this first |
+| Session/lockout instrumentation | **not built** — do this first, and it is the only item with a clock on it |
 | Calibration from existing usage history | built — measured baseline, solved price, inferred sleep window |
 | Per-app charges ranked by measured use | built — with the cover/meter unit conversion shown |
 | LLM report over a measured digest | built — Claude / OpenAI / Gemini, report only, never writes config |
-| Closed-loop controller on the earn/spend ratio | not built — needs the instrumentation above |
+| Closed-loop controller on the earn/spend ratio | not built — see [The optimiser](#the-optimiser) |
+| Elasticity from gate decisions, per-app allocation | not built — see [The optimiser](#the-optimiser) |
 | `$1`/min unit, ratio-derived app cost | built — defaults are `$1` earn / `$11` app cost |
 | Balance visible in the status bar | built — with the `$` kept |
 | Idle earning on the home screen | built — `$0.20`/min |
@@ -503,6 +505,162 @@ and surge a floor, and that a lockout every session is a failure rather than a s
 The API key is stored **unencrypted** in the app's private data. That is safe from other apps
 on an unrooted phone and is not safe from an unlocked one, root, or an ADB backup. Use a key
 scoped to this app that you can revoke.
+
+## The optimiser
+
+Calibration solves for a price **once**, from history. An optimiser keeps solving as behaviour
+drifts — and the reason it needs to is in *Where the balance actually lives* above: any fixed
+price is absorbed around week three. A configuration that worked in month one can be doing
+nothing by month three while still looking correct.
+
+This section is the design for that. Most of it is **not built**; the maths and the parts that
+feed it are. It is written down because the shape of the problem determines which pieces are
+worth building first, and that ordering is not obvious.
+
+### The plant
+
+Over a day of 1440 minutes, with `S` minutes of sleep, `U` minutes of metered app use, and the
+rest split between screen-off and neutral at an effective rate `r̄`:
+
+```
+earned = m·r_sleep·S + m·r̄·(1440 − S − U)
+spent  = P·U + C̄·U/L̄
+```
+
+Setting them equal gives the fixed point `U*` in *The maths* above. Three consequences shape
+everything downstream:
+
+- **The balance has a reflecting barrier at zero** (`max(0.0, …)` in `tick()`). Price does not
+  act on you directly — it acts *through* the balance. You never experience `$11`/min; you
+  experience getting locked out at 21:40. So the response is `U = f(C, B)` with `B` an
+  endogenous state carrying all history, which is what makes this not a static demand problem.
+- **`U*` is a capacity, not a prediction.** If your unconstrained demand already sits below it,
+  the balance simply grows, the lock never fires, and no amount of tuning changes behaviour.
+- **So the real observable is the binding fraction** — the share of app time spent at `B ≈ 0`.
+  That single scalar decides whether the optimiser is allowed to act at all.
+
+### Five ways to do it, and why four lose
+
+| | Objective | Needs | Verdict |
+|---|---|---|---|
+| **Feedforward inversion** | solve `U*(P) = U_target` | `η, L̄, S` — all measurable | **Built.** It is the calibration card. Wrong whenever the constraint doesn't bind. |
+| **Integral control** | drive `Û → U_target` | one daily scalar + binding detector | **The core loop.** Not built. |
+| **Constrained allocation** | min `Σ wⱼUⱼ` s.t. budget | per-app elasticities | The per-app layer, once elasticities exist. |
+| **Bandit / SPSA** | maximise `J(θ)` black-box | randomisation + time | **Rejected** — see below. |
+| **Replay / MPC** | evaluate a candidate config on logged history | an event log | Not an optimiser; it is the evaluation function the others need. |
+
+The bandit loses on arithmetic, not taste. Daily app-minutes on one person has a coefficient of
+variation around 0.3–0.4. Detecting a 15% effect at 80% power needs
+
+```
+n = 2(z_α/2 + z_β)²σ²/δ² = 2(2.80)²(0.35)²/(0.15)² ≈ 85 days per arm
+```
+
+— roughly 24 weeks for a single two-armed comparison of a single knob. Direct search is
+statistically hopeless on one user. That is the strongest argument *for* a model-based loop,
+and it applies equally to a generic contextual bandit over any non-trivial context vector.
+
+### The controller
+
+Work in log space: the plant is multiplicative, and `P` must stay positive.
+
+```
+p = ln P,  u = ln U
+p_{d+1} = p_d + k·(û_d − u_target)     ⟺     P_{d+1} = P_d · (Û_d / U_target)^k
+```
+
+With constant-elasticity demand `u = a − ε·p + w` (`ε = −∂lnU/∂lnP`), the error dynamics are
+
+```
+e_{d+1} = (1 − kε)·e_d
+```
+
+Stable iff `0 < kε < 2`, monotone iff `kε < 1`, time constant `≈ 1/(kε)` days. `ε` is unknown
+but plausibly in `[0.2, 1.5]`, so `k = 0.15` bounds `kε ≤ 0.23` — comfortably monotone across
+the whole range. The settling time is whatever your own elasticity turns out to be: `1/(kε)` is
+about 4 days if you are very price-sensitive and about a month if you are not. Slow is correct
+either way — habituation is a multi-week process, and a price that visibly jumps around
+destroys the legibility the product depends on.
+
+Four things the naive law needs:
+
+- **Filtering.** Day-of-week variance is enormous; EWMA at `λ ≈ 0.25` (~7-day window). That adds
+  a second pole, so keep `kε ≲ λ/2`.
+- **Anti-windup on non-binding.** If the balance never reaches zero, `P` has no authority and
+  the integrator winds up — then the day it finally binds you get a brutal lockout nobody chose.
+  Gate integration on the binding fraction. This is the app-specific control problem and the
+  easiest one to get wrong.
+- **Deadband and rate limits.** ±15% deadband, ±8%/day, hard clamps.
+- **Asymmetry.** Tightening integrates automatically; loosening runs at a fraction of the gain
+  or asks. Without this the loop converges on comfort — the one equilibrium guaranteed to score
+  zero — and the optimiser *becomes* the escape hatch that section warns about.
+
+### Identification is already free
+
+The obvious objection is that you cannot know `ε` without deliberately varying prices. But two
+natural experiments are already built into the product for unrelated reasons:
+
+- **Every cover gate is a discrete choice at a known price.** `CoverChargeOverlay` calls
+  `onEnter` or `onDecline` with a known quoted price, balance, app and hour. Logged, that is a
+  conditional-logit dataset — per-app price sensitivity with no randomisation and no bandit.
+  Two corrections it needs: drop unaffordable gates from the likelihood (the Enter button is
+  hidden, so those aren't choices — that's censoring, not a decline), and remember it measures
+  *entry* elasticity, which bounds visit frequency, not session duration.
+- **Happy and surge boundaries are a regression discontinuity.** Windows are whole hours re-read
+  every tick, so 12:59 → 13:00 is a sharp jump in price against continuous demand.
+
+On functional form: constant-elasticity `U = A·C^{-ε}` makes the controller linear and its
+stability provable, but it predicts `U → ∞` as `C → 0` and is therefore unusable on baseline
+history, which is *entirely* at `C = 0`. Fit semi-log `U = U₀·e^{-kC}` for identification, then
+read the local elasticity `ε(C) = kC` off the fitted model and feed it to the controller gain —
+which makes `k ≤ 0.3/ε(C)` adaptive rather than a guess across a range.
+
+### Where the LLM fits
+
+**Cascade control.** The two loops handle different problems and must not be confused.
+
+The **inner loop** is the integral law above: one scalar, daily, on-device, deterministic,
+provably bounded, works offline. No LLM anywhere near it.
+
+The **outer loop** is the report. Everything the controller structurally *cannot* do is what
+the model is for:
+
+| The controller can't | Because | The model can |
+|---|---|---|
+| choose the target | it's a value judgement, not an error signal | ask, and revise from context |
+| choose *which* of ~18 knobs to move | one scalar error can't identify an 18-DOF actuator | make the structural choice |
+| place schedule windows | combinatorial over 24 bins with a subjective cost | read the histogram and argue about it |
+| notice regime change | it assumes stationarity | new app, holiday, habituation, a changed job |
+| set the per-app regret weights | irreducibly subjective | elicit and maintain them |
+
+The safety property that makes this sane: **the model proposes inside the same clamp the
+controller lives in.** A hallucinated number can do no more damage than one day of ordinary
+controller action. Today that bound is enforced the bluntest way possible — the Report tab
+renders text and nothing else, so nothing the model says reaches the config without a person
+putting it there.
+
+Two things deliberately stay out of the loop. The model is **never** in the per-tick path: the
+economy has to work on a plane with no signal. And it is **never** the sole authority on a
+loosening change, for the same reason the controller isn't.
+
+### What is actually built
+
+| Piece | Status |
+|---|---|
+| The plant model, equilibrium, inversion (`data/Pricing.kt`) | built |
+| Feedforward calibration from history | built |
+| Binding detector (`binds()`) | built, used by the card, not yet by a controller |
+| LLM outer loop, report-only | built |
+| **Event log — gate decisions and the tick stream** | **not built — everything below needs it** |
+| Replay simulator over logged history | not built |
+| Integral controller | not built |
+| Elasticity estimation from gate decisions | not built |
+| Per-app allocation | not built |
+
+The ordering matters and is not the obvious one. Logging is the only item with a clock on it:
+daily usage buckets survive for weeks, but the raw event stream is kept about seven days, so
+every day the gate decisions are not recorded is a discrete-choice observation gone permanently.
+The baseline can be backfilled at leisure. The identification data cannot.
 
 ## Settings
 
