@@ -1,6 +1,9 @@
 package com.timebank.app.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
@@ -38,6 +42,8 @@ import com.timebank.app.data.HourWindow
 import com.timebank.app.util.formatMoney
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import java.time.DayOfWeek
+import java.time.format.TextStyle
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -48,6 +54,7 @@ fun SettingsScreen() {
     val happyActive by Economy.happyHourActive.collectAsState()
     val surgeActive by Economy.surgeActive.collectAsState()
     val sleepActive by Economy.sleepActive.collectAsState()
+    val workActive by Economy.workActive.collectAsState()
     val scope = rememberCoroutineScope()
 
     fun apply(newCfg: EconomyConfig) {
@@ -174,6 +181,9 @@ fun SettingsScreen() {
         )
 
         Spacer(Modifier.height(28.dp))
+        WorkHours(cfg, workActive) { apply(it) }
+
+        Spacer(Modifier.height(28.dp))
         PerAppCosts(cfg) { apply(it) }
 
         Spacer(Modifier.height(28.dp))
@@ -271,7 +281,8 @@ private fun ScheduleSection(
     badge: String,
     description: String,
     active: Boolean,
-    costLabel: String,
+    /** Null for a schedule that moves no price at all, like work hours. */
+    costLabel: String?,
     cost: Double,
     /** Null for a schedule that only moves a rate, like sleep hours. */
     coverLabel: String?,
@@ -295,8 +306,10 @@ private fun ScheduleSection(
     }
     Text(description, style = MaterialTheme.typography.bodySmall)
 
-    RateSlider(label = costLabel, value = cost, range = 0f..60f, suffix = "/min", decimals = 1) {
-        onCost(it)
+    if (costLabel != null) {
+        RateSlider(label = costLabel, value = cost, range = 0f..60f, suffix = "/min", decimals = 1) {
+            onCost(it)
+        }
     }
     if (coverLabel != null) {
         RateSlider(label = coverLabel, value = cover, range = 0f..50f, suffix = "", decimals = 1) {
@@ -359,6 +372,96 @@ private fun HourSlider(label: String, value: Int, max: Int, onChange: (Int) -> U
 }
 
 private fun formatHour(h: Int): String = String.format(Locale.US, "%02d:00", h)
+
+/**
+ * Work hours: the one schedule with days, and the apps it frees. The hours use the same
+ * control as the price schedules; what it adds is the day picker, because work hours that
+ * also ran on Saturday would make WhatsApp free all weekend.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun WorkHours(
+    cfg: EconomyConfig,
+    active: Boolean,
+    apply: (EconomyConfig) -> Unit
+) {
+    val ctx = LocalContext.current
+    var picking by remember { mutableStateOf(false) }
+
+    ScheduleSection(
+        title = "Work hours",
+        badge = "\uD83D\uDCBC",
+        description = "Apps you need for your job are free inside these hours — they " +
+            "neither earn nor cost, and skip any cover charge. Outside work hours they " +
+            "are billed like any other app.",
+        active = active,
+        costLabel = null,
+        cost = 0.0,
+        coverLabel = null,
+        cover = 0.0,
+        windows = cfg.workHours,
+        newWindow = HourWindow(9, 17),
+        onCost = {},
+        onCover = {},
+        onWindows = { apply(cfg.copy(workHours = it)) }
+    )
+
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.padding(top = 12.dp)
+    ) {
+        DayOfWeek.entries.forEach { day ->
+            val on = day in cfg.workDays
+            FilterChip(
+                selected = on,
+                onClick = {
+                    apply(cfg.copy(workDays = if (on) cfg.workDays - day else cfg.workDays + day))
+                },
+                label = { Text(day.getDisplayName(TextStyle.SHORT, Locale.getDefault())) }
+            )
+        }
+    }
+
+    Text(
+        "Work apps",
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier.padding(top = 12.dp)
+    )
+    if (cfg.workApps.isEmpty()) {
+        Text(
+            "None yet — until you add one, work hours change nothing.",
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+    cfg.workApps.sortedBy { labelFor(ctx, it).lowercase() }.forEach { pkg ->
+        key(pkg) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(labelFor(ctx, pkg), style = MaterialTheme.typography.bodyLarge)
+                Spacer(Modifier.weight(1f))
+                TextButton(
+                    onClick = { apply(cfg.copy(workApps = cfg.workApps - pkg)) }
+                ) { Text("Remove") }
+            }
+        }
+    }
+
+    OutlinedButton(
+        onClick = { picking = true },
+        modifier = Modifier.padding(top = 8.dp)
+    ) { Text("Add work app") }
+
+    if (picking) {
+        AppPickerDialog(
+            title = "Free during work hours…",
+            alreadyPriced = cfg.workApps,
+            onPick = { app ->
+                apply(cfg.copy(workApps = cfg.workApps + app.packageName))
+                picking = false
+            },
+            onDismiss = { picking = false }
+        )
+    }
+}
 
 /**
  * Which apps charge to open, and how much. Deliberately empty until you fill it: the

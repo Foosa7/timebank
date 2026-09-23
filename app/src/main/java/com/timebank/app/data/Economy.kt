@@ -1,6 +1,8 @@
 package com.timebank.app.data
 
 import kotlinx.coroutines.flow.MutableStateFlow
+import java.time.DayOfWeek
+import java.time.LocalDateTime
 import java.time.LocalTime
 
 /** What the phone is doing right now, from the economy's point of view. */
@@ -10,7 +12,8 @@ enum class ActivityState {
     MEDIA,       // YouTube / music playing        -> earns media-rate
     APP,         // an app is in the foreground     -> costs app-rate
     NEUTRAL,     // launcher / TimeBank itself      -> earns idle-rate
-    COVER        // app open, cover charge unpaid   -> no earn, no cost, gate showing
+    COVER,       // app open, cover charge unpaid   -> no earn, no cost, gate showing
+    WORK         // a work app during work hours     -> no earn, no cost
 }
 
 /**
@@ -91,6 +94,21 @@ data class EconomyConfig(
     val sleepHours: List<HourWindow> = listOf(HourWindow(23, 7)),
     val sleepOffRatePerMin: Double = 0.2,
 
+    /**
+     * Work hours, the days they apply on, and the apps that are free inside them. Not
+     * everyone can keep their phone down at work — WhatsApp and Chrome are how plenty of
+     * jobs get done — and billing that time would price people out of the game for doing
+     * their job. Inside the schedule a listed app neither earns nor costs, and skips its
+     * cover charge; outside it, the same app is billed like any other.
+     *
+     * Free rather than earning, deliberately: an earning work app would make an eight-hour
+     * shift the best-paid thing in the economy. The app list is empty by default, so the
+     * schedule does nothing until you pick something.
+     */
+    val workHours: List<HourWindow> = listOf(HourWindow(9, 17)),
+    val workDays: Set<DayOfWeek> = DayOfWeek.entries.filter { it <= DayOfWeek.FRIDAY }.toSet(),
+    val workApps: Set<String> = emptySet(),
+
     /** Per-package cost override, package name -> money/min. Falls back to [appCostPerMin]. */
     val appOverrides: Map<String, Double> = emptyMap(),
 
@@ -135,6 +153,23 @@ data class EconomyConfig(
     fun isSurgeAt(time: LocalTime): Boolean = surgeHours.any { it.contains(time) }
 
     fun isSleepAt(time: LocalTime): Boolean = sleepHours.any { it.contains(time) }
+
+    /**
+     * Whether [time] falls in a work shift. The only schedule with days, so a window that
+     * wraps midnight needs a rule for which day owns the small hours: they belong to the
+     * shift that *started* the evening before, so Friday's 22 → 6 still covers early
+     * Saturday and Sunday's does not reach into Monday.
+     */
+    fun isWorkAt(time: LocalDateTime): Boolean = workHours.any { w ->
+        if (!w.contains(time.toLocalTime())) return@any false
+        val wrappedPart = w.startHour > w.endHour && time.hour < w.endHour
+        val shiftDay = if (wrappedPart) time.toLocalDate().minusDays(1) else time.toLocalDate()
+        shiftDay.dayOfWeek in workDays
+    }
+
+    /** Whether [pkg] is free right now: listed as a work app, inside a work shift. */
+    fun isWorkAppAt(pkg: String?, time: LocalDateTime): Boolean =
+        pkg != null && pkg in workApps && isWorkAt(time)
 }
 
 /**
@@ -164,6 +199,9 @@ object Economy {
 
     /** Whether a [EconomyConfig.sleepHours] window is running right now. */
     val sleepActive = MutableStateFlow(false)
+
+    /** Whether a work shift ([EconomyConfig.workHours] on a [EconomyConfig.workDays]) is on now. */
+    val workActive = MutableStateFlow(false)
 
     /**
      * Packages that currently have a private / incognito browsing session open, as

@@ -44,6 +44,7 @@ import com.timebank.app.data.Observations
 import com.timebank.app.data.buildDigest
 import com.timebank.app.data.preview
 import com.timebank.app.data.pricingContext
+import com.timebank.app.data.excludingWork
 import com.timebank.app.data.readObservations
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -204,7 +205,7 @@ fun ReportScreen() {
         }
 
         Spacer(Modifier.height(20.dp))
-        val ready = obs
+        val ready = remember(obs, economy) { obs?.excludingWork(economy) }
         when {
             ready == null -> Text("Reading your usage…", style = MaterialTheme.typography.bodySmall)
 

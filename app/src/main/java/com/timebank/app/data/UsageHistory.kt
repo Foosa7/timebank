@@ -7,6 +7,8 @@ import android.content.Intent
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.temporal.ChronoUnit
 
 /**
  * What the phone already knew about you before TimeBank ticked once.
@@ -68,7 +70,13 @@ data class Baseline(
      */
     val recentMinutesPerDay: Double,
     val visitsPerDay: Double,
-    val perApp: List<AppBaseline>
+    val perApp: List<AppBaseline>,
+    /**
+     * Minutes a day spent in work apps during work hours, already taken out of every figure
+     * above by [excludingWork]. Zero until that has run. The pricing model needs it back,
+     * because that time is not just unbilled — it displaces earning too.
+     */
+    val exemptMinutesPerDay: Double = 0.0
 ) {
     /**
      * Mean session length, taken over the *visit* window rather than the full history.
@@ -169,7 +177,16 @@ data class DayShape(
      * it from. It is worth measuring: the shipped prior of 0.15 and a real value near 0.02
      * move the equilibrium by a third.
      */
-    val neutralFraction: Double?
+    val neutralFraction: Double?,
+    /**
+     * Foreground milliseconds per package per hour of the week (Monday 00:00 is index 0),
+     * over the whole event window. Kept raw rather than pre-filtered so work hours can be
+     * applied afterwards by [excludingWork] — changing a work app then re-prices without
+     * another read of the event log.
+     */
+    val foregroundMsByWeekHour: Map<String, LongArray> = emptyMap(),
+    /** Visits per package per hour of the week, counted the same way as [visitsPerDay]. */
+    val opensByWeekHour: Map<String, IntArray> = emptyMap()
 ) {
     companion object {
         val EMPTY = DayShape(0, emptyMap(), List(24) { 0 }, null, null)
@@ -206,6 +223,8 @@ fun readDayShape(context: Context, days: Int = VISIT_DAYS): DayShape {
 
     val counts = HashMap<String, Int>()
     val byHour = IntArray(24)
+    val fgByWeekHour = HashMap<String, LongArray>()
+    val opensByWeekHour = HashMap<String, IntArray>()
     val seenDays = HashSet<LocalDate>()
     // Longest screen-off stretch per day, which is the night; shorter ones are pockets,
     // meetings and meals, and averaging those in would drag the window to nonsense.
@@ -228,8 +247,12 @@ fun readDayShape(context: Context, days: Int = VISIT_DAYS): DayShape {
             // Attribute the gap since the previous event to whatever was true across it.
             if (lastTs != 0L && ts > lastTs) {
                 val delta = ts - lastTs
+                val app = previous
                 if (!screenOn) offMs += delta
-                else if (previous == null) neutralMs += delta
+                else if (app == null) neutralMs += delta
+                else spreadOverWeekHours(
+                    lastTs, ts, zone, fgByWeekHour.getOrPut(app) { LongArray(WEEK_HOURS) }
+                )
             }
             lastTs = ts
 
@@ -262,6 +285,7 @@ fun readDayShape(context: Context, days: Int = VISIT_DAYS): DayShape {
                             counts[pkg] = (counts[pkg] ?: 0) + 1
                             val zoned = Instant.ofEpochMilli(ts).atZone(zone)
                             byHour[zoned.hour]++
+                            opensByWeekHour.getOrPut(pkg) { IntArray(WEEK_HOURS) }[weekHour(zoned)]++
                             seenDays.add(zoned.toLocalDate())
                         }
                         previous = pkg
@@ -287,8 +311,25 @@ fun readDayShape(context: Context, days: Int = VISIT_DAYS): DayShape {
             neutralMs.toDouble() / (offMs + neutralMs)
         } else {
             null
-        }
+        },
+        foregroundMsByWeekHour = fgByWeekHour,
+        opensByWeekHour = opensByWeekHour
     )
+}
+
+/** Monday 00:00 is 0, Sunday 23:00 is 167. */
+private fun weekHour(t: ZonedDateTime): Int = (t.dayOfWeek.value - 1) * 24 + t.hour
+
+/** Add the span [from, to) to [into], split at each hour boundary it crosses. */
+private fun spreadOverWeekHours(from: Long, to: Long, zone: ZoneId, into: LongArray) {
+    var t = Instant.ofEpochMilli(from).atZone(zone)
+    val end = Instant.ofEpochMilli(to).atZone(zone)
+    while (t.isBefore(end)) {
+        val next = t.truncatedTo(ChronoUnit.HOURS).plusHours(1)
+        val stop = if (next.isBefore(end)) next else end
+        into[weekHour(t)] += stop.toInstant().toEpochMilli() - t.toInstant().toEpochMilli()
+        t = stop
+    }
 }
 
 /**
@@ -364,6 +405,82 @@ fun summarise(
 }
 
 /**
+ * The observations with work time taken out, so calibration prices only the time you
+ * choose. Work-app minutes inside work hours are neither billed nor earned by `tick()`,
+ * and a baseline that still counted them would propose prices tuned against a working
+ * day — far too harsh for the evening that is actually being priced.
+ *
+ * Only the event window knows *when* anything happened, so each work app's share of its
+ * foreground time that fell in work hours is measured there and applied to its long
+ * bucket average. Visits and the hour histogram lose the work-hours opens outright, since
+ * those visits never reach the gate either. Pure: depends on nothing but its arguments.
+ */
+fun Observations.excludingWork(cfg: EconomyConfig): Observations {
+    val shape = this.shape
+    if (cfg.workApps.isEmpty() || shape.eventDays == 0) return this
+
+    val workHourMask = BooleanArray(WEEK_HOURS) { i ->
+        cfg.isWorkAt(REFERENCE_MONDAY.plusDays((i / 24).toLong()).atTime(i % 24, 0))
+    }
+    if (workHourMask.none { it }) return this
+
+    val workShare = HashMap<String, Double>()
+    var exemptMs = 0L
+    val workOpens = HashMap<String, Int>()
+    val workOpensByHour = IntArray(24)
+    for (pkg in cfg.workApps) {
+        val fg = shape.foregroundMsByWeekHour[pkg]
+        if (fg != null) {
+            val total = fg.sum()
+            val work = fg.indices.filter { workHourMask[it] }.sumOf { fg[it] }
+            if (total > 0L) workShare[pkg] = work.toDouble() / total
+            exemptMs += work
+        }
+        shape.opensByWeekHour[pkg]?.forEachIndexed { i, n ->
+            if (workHourMask[i] && n > 0) {
+                workOpens[pkg] = (workOpens[pkg] ?: 0) + n
+                workOpensByHour[i % 24] += n
+            }
+        }
+    }
+
+    val days = shape.eventDays.toDouble()
+    val exemptPerDay = exemptMs / 60_000.0 / days
+    val perApp = baseline.perApp.map { app ->
+        val share = workShare[app.packageName] ?: return@map app
+        app.copy(
+            minutesPerDay = app.minutesPerDay * (1 - share),
+            visitsPerDay = (app.visitsPerDay - (workOpens[app.packageName] ?: 0) / days)
+                .coerceAtLeast(0.0)
+        )
+    }.sortedByDescending { it.minutesPerDay }
+
+    val visits = shape.visitsPerDay.mapValues { (pkg, v) ->
+        (v - (workOpens[pkg] ?: 0) / days).coerceAtLeast(0.0)
+    }
+    return Observations(
+        baseline = baseline.copy(
+            appMinutesPerDay = perApp.sumOf { it.minutesPerDay },
+            // The event window is the recent window, so its measured work time comes off
+            // the recent minutes directly.
+            recentMinutesPerDay = (baseline.recentMinutesPerDay - exemptPerDay).coerceAtLeast(0.0),
+            visitsPerDay = perApp.sumOf { it.visitsPerDay },
+            perApp = perApp,
+            exemptMinutesPerDay = exemptPerDay
+        ),
+        shape = shape.copy(
+            visitsPerDay = visits,
+            opensByHour = shape.opensByHour.mapIndexed { h, n -> (n - workOpensByHour[h]).coerceAtLeast(0) }
+        )
+    )
+}
+
+/** Any Monday will do: [excludingWork] only needs a day of the week for each index. */
+private val REFERENCE_MONDAY: LocalDate = LocalDate.of(2024, 1, 1)
+
+private const val WEEK_HOURS = 7 * 24
+
+/**
  * Read both windows in one go: the long minute history and the short event history.
  *
  * Call off the main thread — the bucket read is one binder call per day.
@@ -421,7 +538,8 @@ fun Baseline.pricingContext(
     return PricingContext(
         meanSessionMin = meanSessionMin,
         meanCoverPerVisit = meanCover,
-        neutralFraction = neutralFraction
+        neutralFraction = neutralFraction,
+        exemptMinutesPerDay = exemptMinutesPerDay
     )
 }
 

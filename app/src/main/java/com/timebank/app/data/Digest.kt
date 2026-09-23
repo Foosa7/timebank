@@ -49,6 +49,7 @@ fun buildDigest(
                 .put("appMinutesPerDay", b.appMinutesPerDay.round1())
                 .put("visitsPerDay", b.visitsPerDay.round1())
                 .put("meanSessionMin", b.meanSessionMin.round1())
+                .put("exemptMinutesPerDay", b.exemptMinutesPerDay.round1())
                 .put("neutralFraction", (obs.shape.neutralFraction ?: -1.0).round2())
                 // A comma string rather than a JSON array: pretty-printing puts each of the
                 // 24 counts on its own line, which swamps the preview the user has to read
@@ -72,6 +73,9 @@ fun buildDigest(
                 .put("surgeHours", cfg.surgeHours.encode())
                 .put("surgeAppCostPerMin", cfg.surgeAppCostPerMin)
                 .put("lockWhenBroke", cfg.lockWhenBroke)
+                .put("workHours", cfg.workHours.encode())
+                .put("workDays", cfg.workDays.sortedBy { it.value }.joinToString(",") { it.name.take(3) })
+                .put("workApps", cfg.workApps.joinToString(", ") { labelFor(context, it) })
         )
         .put(
             // Settled arithmetic, handed over rather than left to be re-derived in prose.

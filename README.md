@@ -17,6 +17,7 @@ per-minute rate to your balance:
 | **Media** | YouTube / music actively playing | `+ mediaRate × multiplier` /min |
 | **Screen off** | screen off, nothing playing | `+ offRate × multiplier` /min |
 | **Neutral** | home launcher or TimeBank itself | `+ idleRate × multiplier` /min |
+| **Work** | a work app, inside work hours | nothing — off the meter, no cover |
 | **Cover** | an app is open but hasn't paid its cover charge | nothing — the gate is up |
 | **App open** | an app is in the foreground and paid in | `− appCost` /min (or that app's own price) |
 
@@ -24,8 +25,8 @@ per-minute rate to your balance:
 - Balance never drops below `$0`.
 - The multiplier boosts every earning rate, but never the app cost.
 - Exactly one state applies per tick, and **the order above is the precedence order**:
-  media beats screen-off, which beats neutral, which beats the cover gate, which beats
-  a metered app.
+  media beats screen-off, which beats neutral, which beats work, which beats the cover
+  gate, which beats a metered app.
 - Neutral earns too, at its own lower rate — being on the home screen is not the same
   as earning nothing.
 
@@ -117,6 +118,23 @@ rather than deleted.
 Surge defaults to the two times the economy is easiest to fritter away: the small hours,
 when you should be asleep and the screen-off rate is quietly paying you, and the morning,
 when a night of earning has left the balance at its highest and cheapest-feeling.
+
+### Work hours
+
+Not everyone can keep their phone down at work — for plenty of jobs WhatsApp and Chrome
+*are* the job. Pick those as **work apps**, set **work hours** (09:00–17:00, Mon–Fri by
+default) and inside them those apps are off the meter: no cost, no earning, no cover gate.
+Outside work hours the same apps are billed like any other, so evening WhatsApp still costs.
+
+- **Free, not earning.** An earning work app would make an eight-hour shift the best-paid
+  thing in the economy.
+- **The only schedule with days.** A window that wraps midnight belongs to the day it
+  *started*, so a Friday 22 → 06 shift still covers early Saturday.
+- **The list is yours.** Chrome being free at work also frees YouTube-in-Chrome at work;
+  TimeBank can't see what a tab is for and doesn't try.
+- **Calibration leaves work out.** Work-app minutes inside work hours are subtracted from
+  the measured baseline, visit counts and hour histogram, and from the awake time that
+  earns — otherwise the solver would price your evening against your working day.
 
 ## Watching the balance
 
@@ -388,6 +406,7 @@ built on top of it, and why logging is the piece with a deadline attached.
 | Happy hour window | built — 12–13 and 19–20, as a price cap |
 | Scheduled surge pricing | built — 00–06 and 07–09, as a price floor |
 | Lower screen-off earning during sleep hours | built — `$0.20`/min, 23:00–07:00 |
+| Work apps free during work hours | built — 09:00–17:00 Mon–Fri, no apps listed by default |
 | 10:00 settlement of overnight earnings | not built — a blunter fix is now in place |
 | Wake-anchored morning curfew + slow override | not built — surge is a *price*, not this gate |
 | Friction on Settings edits | not built |
@@ -682,6 +701,9 @@ to DataStore:
 | Surge windows | whole hours, end exclusive | 00:00–06:00, 07:00–09:00 |
 | Sleep screen-off earning | `$0` – `$60` /min | `$0.2` |
 | Sleep windows | whole hours, end exclusive | 23:00–07:00 |
+| Work windows | whole hours, end exclusive | 09:00–17:00 |
+| Work days | any of Mon – Sun | Mon – Fri |
+| Work apps | picked from installed apps | none (work hours change nothing) |
 | Cover charge, per app | `$0` – `$50` | none listed (no app is gated) |
 | Per-app cost | `$0` – `$60` /min | unset (uses default) |
 | Incognito surcharge | `$0` – `$60` /min | `$22` |

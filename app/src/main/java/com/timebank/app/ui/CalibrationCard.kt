@@ -31,6 +31,7 @@ import com.timebank.app.data.coverEquivalentPerMin
 import com.timebank.app.data.equilibriumUse
 import com.timebank.app.data.labelFor
 import com.timebank.app.data.pricingContext
+import com.timebank.app.data.excludingWork
 import com.timebank.app.data.readObservations
 import com.timebank.app.data.recommend
 import com.timebank.app.data.withRecommendation
@@ -75,7 +76,7 @@ fun CalibrationCard(cfg: EconomyConfig, apply: (EconomyConfig) -> Unit) {
         // the slider's own minimum, or a baseline of a couple of minutes rounds the default
         // to zero and the solver is asked for the price of no use at all.
         if (target == null && !read.baseline.isEmpty) {
-            target = (read.baseline.appMinutesPerDay * 0.66).roundToInt().toDouble()
+            target = (read.excludingWork(cfg).baseline.appMinutesPerDay * 0.66).roundToInt().toDouble()
                 .coerceAtLeast(MIN_TARGET_MIN)
         }
     }
@@ -89,7 +90,8 @@ fun CalibrationCard(cfg: EconomyConfig, apply: (EconomyConfig) -> Unit) {
             )
             Spacer(Modifier.height(8.dp))
 
-            val o = obs
+            // Work time comes out before anything is priced; see excludingWork.
+            val o = remember(obs, cfg) { obs?.excludingWork(cfg) }
             when {
                 o == null -> Text(
                     "Reading your usage history…",

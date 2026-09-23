@@ -88,7 +88,9 @@ fun HomeScreen() {
 
         Spacer(Modifier.height(4.dp))
         val label = stateLabel(activity) +
-            if (activity == ActivityState.APP && !pkg.isNullOrEmpty()) "\n$pkg" else ""
+            if ((activity == ActivityState.APP || activity == ActivityState.WORK) &&
+                !pkg.isNullOrEmpty()
+            ) "\n$pkg" else ""
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium

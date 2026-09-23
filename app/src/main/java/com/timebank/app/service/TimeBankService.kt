@@ -33,7 +33,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.time.LocalTime
+import java.time.LocalDateTime
 import kotlin.math.max
 
 /**
@@ -138,13 +138,19 @@ class TimeBankService : Service() {
 
         // Happy hour is re-read every tick rather than scheduled, so crossing into or out
         // of a window takes effect on the next tick with no alarms to keep in sync.
-        val now24 = LocalTime.now()
+        val nowLocal = LocalDateTime.now()
+        val now24 = nowLocal.toLocalTime()
         val happy = cfg.isHappyHourAt(now24)
         val surge = cfg.isSurgeAt(now24)
         val asleep = cfg.isSleepAt(now24)
         Economy.happyHourActive.value = happy
         Economy.surgeActive.value = surge
         Economy.sleepActive.value = asleep
+        Economy.workActive.value = cfg.isWorkAt(nowLocal)
+
+        // A work app inside work hours is off the meter entirely, cover included — it is
+        // checked before the gate so a work app never sits behind one.
+        val working = cfg.isWorkAppAt(fgPkg, nowLocal)
         val coverCharge = cfg.coverFor(fgPkg, happy, surge)
 
         // An app that hasn't paid its cover for this visit is gated instead of billed.
@@ -157,6 +163,8 @@ class TimeBankService : Service() {
                 ActivityState.SCREEN_OFF to cfg.offRateAt(now24) * cfg.earnMultiplier
             isNeutral ->
                 ActivityState.NEUTRAL to cfg.idleRatePerMin * cfg.earnMultiplier
+            working ->
+                ActivityState.WORK to 0.0
             coverDue ->
                 ActivityState.COVER to 0.0
             else -> {
@@ -167,6 +175,8 @@ class TimeBankService : Service() {
 
         // Any state but "in an app" ends the visit, so the next entry pays again. Note
         // fgPkg is null while the screen is off, so this also covers pocketing the phone.
+        // WORK ends it too: still being in WhatsApp when the shift ends should gate it,
+        // not carry an admission nobody paid for into the evening.
         if (state != ActivityState.APP && state != ActivityState.COVER) admittedPackage = null
 
         // Only meaningful while actually being charged for an app.
@@ -327,6 +337,7 @@ class TimeBankService : Service() {
         Economy.happyHourActive.value = false
         Economy.surgeActive.value = false
         Economy.sleepActive.value = false
+        Economy.workActive.value = false
         Economy.activity.value = ActivityState.STOPPED
         Economy.ratePerMin.value = 0.0
         Economy.privateSurchargeActive.value = false

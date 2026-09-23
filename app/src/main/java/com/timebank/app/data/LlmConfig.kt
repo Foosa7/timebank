@@ -113,6 +113,9 @@ val DEFAULT_SYSTEM_PROMPT = """
       costs simply does nothing for that app; it does not make the window expensive, and
       saying it does is a factual error. Neither window can conjure a cover charge onto an
       app that has none.
+    - Work apps are free during work hours: no cost, no earning, no cover. That time is
+      already removed from every measured figure (`exemptMinutesPerDay` says how much), so
+      do not suggest pricing it — it is time they do not get to choose.
 
     WHERE CONFIGURATIONS GO WRONG
     - The earn/spend ratio is the most important number. Too generous and the app is

@@ -11,6 +11,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.time.DayOfWeek
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "timebank")
 
@@ -37,6 +38,9 @@ class SettingsRepository(private val context: Context) {
         val SURGE_COVER = doublePreferencesKey("surge_cover_charge")
         val SLEEP_HOURS = stringPreferencesKey("sleep_hours")
         val SLEEP_RATE = doublePreferencesKey("sleep_off_rate")
+        val WORK_HOURS = stringPreferencesKey("work_hours")
+        val WORK_DAYS = stringPreferencesKey("work_days")
+        val WORK_APPS = stringPreferencesKey("work_apps")
         // Report settings. Separate from the economy keys above because nothing here is
         // read by the service, and an API key has no business on the path of a slider drag.
         val LLM_PROVIDER = stringPreferencesKey("llm_provider")
@@ -67,7 +71,10 @@ class SettingsRepository(private val context: Context) {
             surgeAppCostPerMin = p[Keys.SURGE_APP] ?: d.surgeAppCostPerMin,
             surgeCoverChargePerApp = p[Keys.SURGE_COVER] ?: d.surgeCoverChargePerApp,
             sleepHours = p[Keys.SLEEP_HOURS]?.let { decodeWindows(it) } ?: d.sleepHours,
-            sleepOffRatePerMin = p[Keys.SLEEP_RATE] ?: d.sleepOffRatePerMin
+            sleepOffRatePerMin = p[Keys.SLEEP_RATE] ?: d.sleepOffRatePerMin,
+            workHours = p[Keys.WORK_HOURS]?.let { decodeWindows(it) } ?: d.workHours,
+            workDays = p[Keys.WORK_DAYS]?.let { decodeDays(it) } ?: d.workDays,
+            workApps = decodePackages(p[Keys.WORK_APPS])
         )
     }
 
@@ -125,6 +132,9 @@ class SettingsRepository(private val context: Context) {
             it[Keys.SURGE_COVER] = c.surgeCoverChargePerApp
             it[Keys.SLEEP_HOURS] = encodeWindows(c.sleepHours)
             it[Keys.SLEEP_RATE] = c.sleepOffRatePerMin
+            it[Keys.WORK_HOURS] = encodeWindows(c.workHours)
+            it[Keys.WORK_DAYS] = encodeDays(c.workDays)
+            it[Keys.WORK_APPS] = encodePackages(c.workApps)
         }
     }
 }
@@ -149,6 +159,20 @@ internal fun decodeWindows(s: String): List<HourWindow> {
         HourWindow(start.coerceIn(0, 23), end.coerceIn(0, 24))
     }
 }
+
+/** Days as ISO numbers, "1,2,3,4,5" for Monday to Friday. Blank is "no days", not the default. */
+internal fun encodeDays(d: Set<DayOfWeek>): String =
+    d.sortedBy { it.value }.joinToString(",") { it.value.toString() }
+
+internal fun decodeDays(s: String): Set<DayOfWeek> =
+    s.split(",").mapNotNull { it.trim().toIntOrNull()?.takeIf { n -> n in 1..7 } }
+        .map { DayOfWeek.of(it) }.toSet()
+
+/** A bare package set, as "pkg;pkg" — the overrides encoding without the values. */
+internal fun encodePackages(p: Set<String>): String = p.sorted().joinToString(";")
+
+internal fun decodePackages(s: String?): Set<String> =
+    if (s.isNullOrBlank()) emptySet() else s.split(";").filter { it.isNotBlank() }.toSet()
 
 internal fun encodeOverrides(m: Map<String, Double>): String =
     m.entries.joinToString(";") { "${it.key}=${it.value}" }

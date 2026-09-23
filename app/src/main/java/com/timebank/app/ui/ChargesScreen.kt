@@ -34,6 +34,7 @@ import com.timebank.app.data.EconomyConfig
 import com.timebank.app.data.Observations
 import com.timebank.app.data.coverEquivalentPerMin
 import com.timebank.app.data.labelFor
+import com.timebank.app.data.excludingWork
 import com.timebank.app.data.readObservations
 import com.timebank.app.util.formatMoney
 import kotlinx.coroutines.Dispatchers
@@ -81,7 +82,7 @@ fun ChargesScreen() {
         )
         Spacer(Modifier.height(16.dp))
 
-        val ready = obs
+        val ready = remember(obs, cfg) { obs?.excludingWork(cfg) }
         when {
             ready == null -> Text("Reading your usage…", style = MaterialTheme.typography.bodySmall)
 

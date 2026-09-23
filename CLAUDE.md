@@ -159,8 +159,8 @@ partial wake lock and runs a coroutine tick loop (`TICK_MS = 3s`). Each `tick()`
 1. Reads `powerManager.isInteractive`, `MediaMonitor.isMediaPlaying`, and
    `ForegroundAppMonitor.currentForegroundPackage()`.
 2. Resolves exactly one `ActivityState` in a `when` whose **order encodes the economy's
-   precedence**: media > screen-off > neutral (launcher / TimeBank itself) > cover gate >
-   app. Changing the branch order changes the product's rules — the README documents media
+   precedence**: media > screen-off > neutral (launcher / TimeBank itself) > work > cover
+   gate > app. Changing the branch order changes the product's rules — the README documents media
    beating app. `NEUTRAL` earns `idleRatePerMin`, so "not in an app" is not the same as
    "earning nothing".
 3. Costs resolve as `cfg.costFor(pkg)` (per-app override, else `appCostPerMin`) plus
@@ -197,6 +197,17 @@ surge window's floor would conjure a `$15` gate onto every app on the phone.
 `sleepHours` is a third schedule that moves the *earning* side: `offRateAt(now)` returns
 `sleepOffRatePerMin` inside it. It is the only schedule that touches an earn rate, so it
 is applied in the `SCREEN_OFF` branch rather than through the cap/floor pair.
+
+Work hours (`workHours` + `workDays` + `workApps`) are the one schedule with **days**, and
+the only one that takes an app *off* the meter: a listed app inside a shift resolves to
+`WORK` at rate 0 — deliberately not earning — and is checked before the cover gate, so it
+is never gated. `isWorkAt` takes a `LocalDateTime` because a window wrapping midnight
+belongs to the day it *started*. Calibration must see the same thing the tick does, so
+`Observations.excludingWork(cfg)` strips work-app time out of the baseline, visits and hour
+histogram, and hands the removed minutes to `PricingContext.exemptMinutesPerDay`, which
+comes off the awake earning time. `DayShape` keeps per-package foreground ms and opens per
+**hour of the week** raw, so that stripping is pure and re-runs on a config edit without
+re-reading the event log — apply it at every `readObservations` caller.
 
 `service/CoverChargeOverlay.kt` — the cover charge is a one-off fee per *visit* to an app,
 taken before per-minute billing starts. The gate blocks the app until the user pays in or

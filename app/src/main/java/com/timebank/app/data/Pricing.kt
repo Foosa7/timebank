@@ -26,7 +26,7 @@ import java.time.LocalTime
  * Everything here is pure arithmetic over [EconomyConfig] — no Android, no state, no I/O —
  * so it can be reasoned about and checked against by hand.
  *
- * Four assumptions are baked in, and all four are honest-but-approximate rather than
+ * Five assumptions are baked in, and all five are honest-but-approximate rather than
  * exact. They matter when reading a number this file produces:
  *
  *  - You are asleep, screen off, for the whole of [EconomyConfig.sleepHours].
@@ -35,6 +35,8 @@ import java.time.LocalTime
  *  - The base [EconomyConfig.appCostPerMin] is used rather than a schedule-weighted
  *    price, because weighting needs an hour-of-day usage histogram and the daily buckets
  *    a fresh install can read do not carry one.
+ *  - Work-app time in work hours, `W`, is off the books: `DAY − S` above is really
+ *    `DAY − S − W`, and `U` never includes it. See [PricingContext.exemptMinutesPerDay].
  *  - `U*` is a *capacity*, not a prediction. It says what the economy can sustain, not
  *    what you will do — see [binds].
  */
@@ -61,7 +63,12 @@ data class PricingContext(
     val meanSessionMin: Double,
     /** Visit-weighted mean cover charge across the apps that have one. */
     val meanCoverPerVisit: Double = 0.0,
-    val neutralFraction: Double = DEFAULT_NEUTRAL_FRACTION
+    val neutralFraction: Double = DEFAULT_NEUTRAL_FRACTION,
+    /**
+     * Minutes a day in work apps during work hours. They sit outside the economy entirely —
+     * no cost, but no earning either — so they come off the awake time that earns.
+     */
+    val exemptMinutesPerDay: Double = 0.0
 )
 
 /**
@@ -103,7 +110,7 @@ fun coverEquivalentPerMin(coverPerVisit: Double, meanSessionMin: Double): Double
  */
 fun EconomyConfig.dailyEarningCapacity(ctx: PricingContext): Double {
     val sleep = sleepMinutesPerDay()
-    val awake = (DAY_MINUTES - sleep).coerceAtLeast(0.0)
+    val awake = (DAY_MINUTES - sleep - ctx.exemptMinutesPerDay).coerceAtLeast(0.0)
     return sleepOffRatePerMin * earnMultiplier * sleep + awakeEarnRate(ctx) * awake
 }
 

@@ -38,4 +38,5 @@ fun stateLabel(state: ActivityState): String = when (state) {
     ActivityState.APP -> "App open — spending"
     ActivityState.NEUTRAL -> "Home / TimeBank — idle"
     ActivityState.COVER -> "Cover charge — waiting"
+    ActivityState.WORK -> "Work app — free during work hours"
 }
